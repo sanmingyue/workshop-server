@@ -375,12 +375,27 @@ export function getUserLikedWorkIds(userId: number): number[] {
 
 // ─── 统计 ───
 
-export function getStats(): { totalUsers: number; totalWorks: number; pendingWorks: number; todayUploads: number } {
+export function getStats(): {
+  totalUsers: number; totalWorks: number; pendingWorks: number; todayUploads: number;
+  pendingByType: Record<string, number>;
+  approvedByType: Record<string, number>;
+} {
   const totalUsers = (getDb().prepare('SELECT COUNT(*) as c FROM users').get() as any).c;
   const totalWorks = (getDb().prepare(`SELECT COUNT(*) as c FROM works WHERE status = 'approved'`).get() as any).c;
   const pendingWorks = (getDb().prepare(`SELECT COUNT(*) as c FROM works WHERE status = 'pending'`).get() as any).c;
   const todayUploads = (getDb().prepare(`SELECT COUNT(*) as c FROM works WHERE date(created_at) = date('now')`).get() as any).c;
-  return { totalUsers, totalWorks, pendingWorks, todayUploads };
+
+  // 按类型统计待审核
+  const pendingByTypeRows = getDb().prepare(`SELECT type, COUNT(*) as c FROM works WHERE status = 'pending' GROUP BY type`).all() as { type: string; c: number }[];
+  const pendingByType: Record<string, number> = {};
+  for (const row of pendingByTypeRows) pendingByType[row.type] = row.c;
+
+  // 按类型统计已通过
+  const approvedByTypeRows = getDb().prepare(`SELECT type, COUNT(*) as c FROM works WHERE status = 'approved' GROUP BY type`).all() as { type: string; c: number }[];
+  const approvedByType: Record<string, number> = {};
+  for (const row of approvedByTypeRows) approvedByType[row.type] = row.c;
+
+  return { totalUsers, totalWorks, pendingWorks, todayUploads, pendingByType, approvedByType };
 }
 
 // ─── 获取所有已用标签 ───
