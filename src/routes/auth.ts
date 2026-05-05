@@ -74,7 +74,7 @@ router.get('/discord/callback', async (req: Request, res: Response) => {
 
     // 检查是否应该设为管理员
     if (config.adminDiscordIds.includes(discordUser.id) && user.role !== 'admin') {
-      getDb().prepare('UPDATE users SET role = "admin" WHERE id = ?').run(user.id);
+      getDb().prepare("UPDATE users SET role = 'admin' WHERE id = ?").run(user.id);
       user.role = 'admin';
     }
 

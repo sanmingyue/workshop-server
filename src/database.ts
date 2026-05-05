@@ -202,7 +202,7 @@ export function getApprovedWorks(
   sort?: string,
   tag?: string,
 ): { works: WorkWithAuthor[]; total: number } {
-  let where = 'WHERE w.status = "approved"';
+  let where = `WHERE w.status = 'approved'`;
   const params: any[] = [];
 
   if (type) {
@@ -280,13 +280,13 @@ export function deleteWork(workId: number): void {
 
 export function approveWork(workId: number, reviewerId: number): void {
   getDb().prepare(
-    'UPDATE works SET status = "approved", reviewed_at = CURRENT_TIMESTAMP, reviewed_by = ? WHERE id = ?',
+    `UPDATE works SET status = 'approved', reviewed_at = CURRENT_TIMESTAMP, reviewed_by = ? WHERE id = ?`,
   ).run(reviewerId, workId);
 }
 
 export function rejectWork(workId: number, reviewerId: number, reason: string): void {
   getDb().prepare(
-    'UPDATE works SET status = "rejected", reject_reason = ?, reviewed_at = CURRENT_TIMESTAMP, reviewed_by = ? WHERE id = ?',
+    `UPDATE works SET status = 'rejected', reject_reason = ?, reviewed_at = CURRENT_TIMESTAMP, reviewed_by = ? WHERE id = ?`,
   ).run(reason, reviewerId, workId);
 }
 
@@ -348,16 +348,16 @@ export function getUserLikedWorkIds(userId: number): number[] {
 
 export function getStats(): { totalUsers: number; totalWorks: number; pendingWorks: number; todayUploads: number } {
   const totalUsers = (getDb().prepare('SELECT COUNT(*) as c FROM users').get() as any).c;
-  const totalWorks = (getDb().prepare('SELECT COUNT(*) as c FROM works WHERE status = "approved"').get() as any).c;
-  const pendingWorks = (getDb().prepare('SELECT COUNT(*) as c FROM works WHERE status = "pending"').get() as any).c;
-  const todayUploads = (getDb().prepare('SELECT COUNT(*) as c FROM works WHERE date(created_at) = date("now")').get() as any).c;
+  const totalWorks = (getDb().prepare(`SELECT COUNT(*) as c FROM works WHERE status = 'approved'`).get() as any).c;
+  const pendingWorks = (getDb().prepare(`SELECT COUNT(*) as c FROM works WHERE status = 'pending'`).get() as any).c;
+  const todayUploads = (getDb().prepare(`SELECT COUNT(*) as c FROM works WHERE date(created_at) = date('now')`).get() as any).c;
   return { totalUsers, totalWorks, pendingWorks, todayUploads };
 }
 
 // ─── 获取所有已用标签 ───
 
 export function getAllTags(): string[] {
-  const rows = getDb().prepare('SELECT DISTINCT tags FROM works WHERE status = "approved"').all() as { tags: string }[];
+  const rows = getDb().prepare(`SELECT DISTINCT tags FROM works WHERE status = 'approved'`).all() as { tags: string }[];
   const tagSet = new Set<string>();
   for (const row of rows) {
     try {

@@ -231,7 +231,7 @@ router.put('/:id', requireAuth, upload.single('cover'), (req: Request, res: Resp
 
   // 修改后重新进入待审核
   const { getDb } = require('../database');
-  getDb().prepare('UPDATE works SET status = "pending", reject_reason = "" WHERE id = ?').run(work.id);
+  getDb().prepare(`UPDATE works SET status = 'pending', reject_reason = '' WHERE id = ?`).run(work.id);
 
   res.json({ message: '作品已更新，重新等待审核' });
 });
