@@ -88,6 +88,9 @@ router.get('/discord/callback', async (req: Request, res: Response) => {
     const sessionToken = uuidv4();
     createSession(user.id, sessionToken, 168); // 7天
 
+    // 设置 cookie（用于管理后台浏览器访问）
+    res.setHeader('Set-Cookie', `ws_token=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${7 * 24 * 3600}; Secure`);
+
     // 返回成功页面，页面中会把 token 传给酒馆脚本
     res.send(successPage(sessionToken, user, stateData.returnUrl));
   } catch (err: any) {
