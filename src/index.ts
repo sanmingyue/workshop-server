@@ -67,6 +67,8 @@ app.get('/api/my/works', requireAuth, (req, res) => {
       type: w.type,
       tags: JSON.parse(w.tags || '[]'),
       cover_url: w.cover_filename ? `${config.baseUrl}/uploads/${w.cover_filename}` : null,
+      card_link: w.card_link || '',
+      file_type: w.file_type || 'json',
       status: w.status,
       reject_reason: w.reject_reason,
       download_count: w.download_count,

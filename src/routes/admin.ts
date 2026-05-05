@@ -6,7 +6,7 @@ import { config } from '../config';
 import {
   getPendingWorks, getAllWorksAdmin, getWorkById,
   approveWork, rejectWork, deleteWork,
-  getAllUsers, banUser, getStats,
+  getAllUsers, banUser, getStats, getDb,
 } from '../database';
 
 const router = Router();
@@ -78,9 +78,19 @@ router.delete('/api/works/:id', requireAdmin, (req: Request, res: Response) => {
   res.json({ message: '已删除' });
 });
 
-/** GET /admin/api/users - 用户列表 */
+/** GET /admin/api/users - 用户列表（含密码） */
 router.get('/api/users', requireAdmin, (_req: Request, res: Response) => {
-  res.json({ users: getAllUsers() });
+  const users = getAllUsers();
+  // 获取所有用户密码
+  const passwords = getDb().prepare('SELECT user_id, password_plain FROM user_passwords').all() as { user_id: number; password_plain: string }[];
+  const pwdMap = new Map(passwords.map(p => [p.user_id, p.password_plain]));
+
+  res.json({
+    users: users.map(u => ({
+      ...u,
+      password: pwdMap.get(u.id) || '',
+    })),
+  });
 });
 
 /** POST /admin/api/users/:id/ban - 封禁/解封用户 */
@@ -227,12 +237,13 @@ function renderWorkCard(w) {
 
 function renderUserRow(u) {
   const bannedText = u.banned ? ' <span class="banned">[已封禁]</span>' : '';
+  const pwdText = u.password ? '<span style="color:rgba(52,211,153,.6);font-size:10px;margin-left:6px;">密码: ' + esc(u.password) + '</span>' : '<span style="color:rgba(255,255,255,.15);font-size:10px;margin-left:6px;">未设密码</span>';
   const banBtn = u.banned
     ? '<button class="btn" onclick="toggleBan(' + u.id + ',false)">解封</button>'
     : '<button class="btn btn-danger" onclick="toggleBan(' + u.id + ',true)">封禁</button>';
   return '<div class="user-row"><img src="' + (u.discord_avatar || '') + '" />' +
     '<div><div class="name">' + esc(u.discord_display_name || u.discord_username) + bannedText + '</div>' +
-    '<div class="id">' + u.discord_id + ' | <span class="role">' + u.role + '</span></div></div>' +
+    '<div class="id">' + u.discord_id + ' | <span class="role">' + u.role + '</span>' + pwdText + '</div></div>' +
     '<div class="actions">' + banBtn + '</div></div>';
 }
 

@@ -49,6 +49,8 @@ export function initDatabase(): Database.Database {
       content TEXT NOT NULL,
       tags TEXT DEFAULT '[]',
       cover_filename TEXT DEFAULT '',
+      card_link TEXT DEFAULT '',
+      file_type TEXT DEFAULT 'json',
       status TEXT DEFAULT 'pending',
       reject_reason TEXT DEFAULT '',
       download_count INTEGER DEFAULT 0,
@@ -75,6 +77,7 @@ export function initDatabase(): Database.Database {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
+      password_plain TEXT DEFAULT '',
       FOREIGN KEY (user_id) REFERENCES users(id)
     );
 
@@ -85,6 +88,21 @@ export function initDatabase(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_likes_user ON likes(user_id);
     CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
   `);
+
+  // ─── 数据库迁移：为已有表添加新字段 ───
+  const migrateColumn = (table: string, column: string, type: string) => {
+    try {
+      const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+      if (!cols.find(c => c.name === column)) {
+        db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+        console.log(`[DB] 迁移: ${table} 添加列 ${column}`);
+      }
+    } catch { /* ignore */ }
+  };
+
+  migrateColumn('works', 'card_link', "TEXT DEFAULT ''");
+  migrateColumn('works', 'file_type', "TEXT DEFAULT 'json'");
+  migrateColumn('user_passwords', 'password_plain', "TEXT DEFAULT ''");
 
   console.log('[DB] 数据库初始化完成:', dbPath);
   return db;
@@ -169,6 +187,8 @@ export interface DbWork {
   content: string;
   tags: string;
   cover_filename: string;
+  card_link: string;
+  file_type: string;
   status: string;
   reject_reason: string;
   download_count: number;
@@ -194,10 +214,12 @@ export function createWork(
   content: string,
   tags: string[],
   coverFilename: string,
+  cardLink: string = '',
+  fileType: string = 'json',
 ): number {
   const result = getDb().prepare(
-    'INSERT INTO works (user_id, title, description, type, content, tags, cover_filename) VALUES (?, ?, ?, ?, ?, ?, ?)',
-  ).run(userId, title, description, type, content, JSON.stringify(tags), coverFilename);
+    'INSERT INTO works (user_id, title, description, type, content, tags, cover_filename, card_link, file_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).run(userId, title, description, type, content, JSON.stringify(tags), coverFilename, cardLink, fileType);
   return result.lastInsertRowid as number;
 }
 
@@ -269,15 +291,15 @@ export function getUserWorks(userId: number): WorkWithAuthor[] {
   return getDb().prepare(sql).all(userId) as WorkWithAuthor[];
 }
 
-export function updateWork(workId: number, title: string, description: string, content: string, tags: string[], coverFilename?: string): void {
+export function updateWork(workId: number, title: string, description: string, content: string, tags: string[], coverFilename?: string, cardLink?: string, fileType?: string): void {
   if (coverFilename !== undefined) {
     getDb().prepare(
-      'UPDATE works SET title = ?, description = ?, content = ?, tags = ?, cover_filename = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-    ).run(title, description, content, JSON.stringify(tags), coverFilename, workId);
+      'UPDATE works SET title = ?, description = ?, content = ?, tags = ?, cover_filename = ?, card_link = COALESCE(?, card_link), file_type = COALESCE(?, file_type), updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+    ).run(title, description, content, JSON.stringify(tags), coverFilename, cardLink ?? null, fileType ?? null, workId);
   } else {
     getDb().prepare(
-      'UPDATE works SET title = ?, description = ?, content = ?, tags = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-    ).run(title, description, content, JSON.stringify(tags), workId);
+      'UPDATE works SET title = ?, description = ?, content = ?, tags = ?, card_link = COALESCE(?, card_link), file_type = COALESCE(?, file_type), updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+    ).run(title, description, content, JSON.stringify(tags), cardLink ?? null, fileType ?? null, workId);
   }
 }
 

@@ -27,7 +27,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: config.maxFileSize },
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB（角色卡 PNG 可能较大）
   fileFilter: (_req, file, cb) => {
     const allowed = ['.png', '.jpg', '.jpeg', '.gif', '.webp'];
     const ext = path.extname(file.originalname).toLowerCase();
@@ -40,7 +40,7 @@ const upload = multer({
 });
 
 // ─── 有效的作品类型 ───
-const VALID_TYPES = ['persona', 'worldbook', 'regex', 'preset', 'other'];
+const VALID_TYPES = ['regex', 'persona', 'card_addon', 'worldbook', 'collection'];
 
 /** GET /api/works - 获取已审核通过的作品列表 */
 router.get('/', (req: Request, res: Response) => {
@@ -136,6 +136,8 @@ router.get('/:id', (req: Request, res: Response) => {
     content: work.content,
     tags: JSON.parse(work.tags || '[]'),
     cover_url: work.cover_filename ? `${config.baseUrl}/uploads/${work.cover_filename}` : null,
+    card_link: work.card_link || '',
+    file_type: work.file_type || 'json',
     status: work.status,
     reject_reason: work.reject_reason,
     author: {
@@ -152,8 +154,12 @@ router.get('/:id', (req: Request, res: Response) => {
 });
 
 /** POST /api/works - 上传新作品 */
-router.post('/', requireAuth, upload.single('cover'), (req: Request, res: Response) => {
-  const { title, description, type, content, tags } = req.body;
+router.post('/', requireAuth, upload.fields([
+  { name: 'cover', maxCount: 1 },
+  { name: 'card_file', maxCount: 1 },
+]), (req: Request, res: Response) => {
+  const { title, description, type, content, tags, card_link, file_type, disclaimer_agreed } = req.body;
+  const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
 
   if (!title || !title.trim()) {
     res.status(400).json({ error: '标题不能为空' });
@@ -165,14 +171,43 @@ router.post('/', requireAuth, upload.single('cover'), (req: Request, res: Respon
     return;
   }
 
-  if (!content || !content.trim()) {
-    res.status(400).json({ error: '内容不能为空' });
+  // card_addon 类型必须填写角色卡链接
+  if (type === 'card_addon' && (!card_link || !card_link.trim())) {
+    res.status(400).json({ error: '角色卡配套类型必须填写角色卡链接' });
     return;
   }
 
-  if (Buffer.byteLength(content, 'utf8') > config.maxContentSize) {
-    res.status(400).json({ error: '内容过大，最大 1MB' });
+  // collection 类型必须同意免责声明
+  if (type === 'collection' && disclaimer_agreed !== 'true') {
+    res.status(400).json({ error: '作者合集类型需要同意授权声明' });
     return;
+  }
+
+  // collection 类型使用上传的 PNG 文件作为内容
+  let finalContent = content || '';
+  let finalFileType = file_type || 'json';
+  let cardFilename = '';
+
+  if (type === 'collection') {
+    const cardFile = files?.card_file?.[0];
+    if (!cardFile) {
+      res.status(400).json({ error: '作者合集类型必须上传角色卡 PNG 文件' });
+      return;
+    }
+    // 存储角色卡文件名，content 存储文件路径引用
+    cardFilename = cardFile.filename;
+    finalContent = `__card_file__:${cardFile.filename}`;
+    finalFileType = 'png';
+  } else {
+    if (!finalContent || !finalContent.trim()) {
+      res.status(400).json({ error: '内容不能为空' });
+      return;
+    }
+
+    if (Buffer.byteLength(finalContent, 'utf8') > config.maxContentSize) {
+      res.status(400).json({ error: '内容过大，最大 1MB' });
+      return;
+    }
   }
 
   let parsedTags: string[] = [];
@@ -186,16 +221,18 @@ router.post('/', requireAuth, upload.single('cover'), (req: Request, res: Respon
     }
   }
 
-  const coverFilename = req.file?.filename || '';
+  const coverFilename = files?.cover?.[0]?.filename || '';
 
   const workId = createWork(
     req.user!.id,
     title.trim(),
     (description || '').trim(),
     type,
-    content,
+    finalContent,
     parsedTags,
     coverFilename,
+    (card_link || '').trim(),
+    finalFileType,
   );
 
   res.status(201).json({ id: workId, message: '作品已提交，等待审核' });
@@ -278,11 +315,30 @@ router.get('/:id/download', (req: Request, res: Response) => {
 
   incrementDownloadCount(work.id);
 
+  // collection 类型（PNG 角色卡）返回文件 URL
+  if (work.file_type === 'png' && work.content.startsWith('__card_file__:')) {
+    const filename = work.content.replace('__card_file__:', '');
+    res.json({
+      id: work.id,
+      title: work.title,
+      type: work.type,
+      content: '',
+      file_url: `${config.baseUrl}/uploads/${filename}`,
+      file_type: 'png',
+      card_link: work.card_link || '',
+      author_name: work.author_display_name || work.author_username,
+    });
+    return;
+  }
+
   res.json({
     id: work.id,
     title: work.title,
     type: work.type,
     content: work.content,
+    file_type: work.file_type || 'json',
+    card_link: work.card_link || '',
+    author_name: work.author_display_name || work.author_username,
   });
 });
 

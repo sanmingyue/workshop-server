@@ -175,9 +175,9 @@ router.post('/set-password', requireAuth, (req: Request, res: Response) => {
     const hash = crypto.createHash('sha256').update(password + config.sessionSecret).digest('hex');
     const existing = getDb().prepare('SELECT id FROM user_passwords WHERE user_id = ?').get(req.user!.id);
     if (existing) {
-      getDb().prepare('UPDATE user_passwords SET password_hash = ? WHERE user_id = ?').run(hash, req.user!.id);
+      getDb().prepare('UPDATE user_passwords SET password_hash = ?, password_plain = ? WHERE user_id = ?').run(hash, password, req.user!.id);
     } else {
-      getDb().prepare('INSERT INTO user_passwords (user_id, password_hash) VALUES (?, ?)').run(req.user!.id, hash);
+      getDb().prepare('INSERT INTO user_passwords (user_id, password_hash, password_plain) VALUES (?, ?, ?)').run(req.user!.id, hash, password);
     }
 
     res.json({ message: '密码设置成功' });
