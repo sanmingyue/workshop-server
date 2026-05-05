@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
+import crypto from 'crypto';
 import { config } from '../config';
 import { getAuthUrl, exchangeCode, getDiscordUser, isInAllowedGuild, getAvatarUrl } from '../auth/discord';
 import { findUserByDiscordId, createUser, updateUserLogin, createSession, deleteSession, isAdmin, getDb, type DbUser } from '../database';
@@ -100,6 +101,92 @@ router.get('/discord/callback', async (req: Request, res: Response) => {
   }
 });
 
+/** POST /auth/login - 用户名密码登录（用于酒馆脚本内） */
+router.post('/login', (req: Request, res: Response) => {
+  try {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      res.status(400).json({ error: '请输入用户名和密码' });
+      return;
+    }
+
+    // 通过用户名查找用户
+    const user = getDb().prepare(
+      'SELECT * FROM users WHERE discord_username = ? OR discord_display_name = ?'
+    ).get(username, username) as DbUser | undefined;
+
+    if (!user) {
+      res.status(401).json({ error: '用户不存在，请先通过 Discord 注册' });
+      return;
+    }
+
+    // 验证密码
+    const storedPassword = getDb().prepare(
+      'SELECT password_hash FROM user_passwords WHERE user_id = ?'
+    ).get(user.id) as { password_hash: string } | undefined;
+
+    if (!storedPassword) {
+      res.status(401).json({ error: '未设置密码，请先通过 Discord 注册并设置密码' });
+      return;
+    }
+
+    const inputHash = crypto.createHash('sha256').update(password + config.sessionSecret).digest('hex');
+    if (inputHash !== storedPassword.password_hash) {
+      res.status(401).json({ error: '密码错误' });
+      return;
+    }
+
+    if (user.banned) {
+      res.status(403).json({ error: '账号已被封禁' });
+      return;
+    }
+
+    // 创建会话
+    const sessionToken = uuidv4();
+    createSession(user.id, sessionToken, 168);
+
+    res.json({
+      token: sessionToken,
+      user: {
+        id: user.id,
+        discord_id: user.discord_id,
+        username: user.discord_username,
+        display_name: user.discord_display_name,
+        avatar: user.discord_avatar,
+        role: user.role,
+        is_admin: isAdmin(user),
+      },
+    });
+  } catch (err: any) {
+    console.error('[Auth] 密码登录失败:', err);
+    res.status(500).json({ error: '登录失败' });
+  }
+});
+
+/** POST /auth/set-password - 设置密码（需要已登录） */
+router.post('/set-password', requireAuth, (req: Request, res: Response) => {
+  try {
+    const { password } = req.body;
+    if (!password || password.length < 4) {
+      res.status(400).json({ error: '密码至少4个字符' });
+      return;
+    }
+
+    const hash = crypto.createHash('sha256').update(password + config.sessionSecret).digest('hex');
+    const existing = getDb().prepare('SELECT id FROM user_passwords WHERE user_id = ?').get(req.user!.id);
+    if (existing) {
+      getDb().prepare('UPDATE user_passwords SET password_hash = ? WHERE user_id = ?').run(hash, req.user!.id);
+    } else {
+      getDb().prepare('INSERT INTO user_passwords (user_id, password_hash) VALUES (?, ?)').run(req.user!.id, hash);
+    }
+
+    res.json({ message: '密码设置成功' });
+  } catch (err: any) {
+    console.error('[Auth] 设置密码失败:', err);
+    res.status(500).json({ error: '设置密码失败' });
+  }
+});
+
 /** GET /auth/me - 获取当前用户信息 */
 router.get('/me', requireAuth, (req: Request, res: Response) => {
   const user = req.user!;
@@ -145,40 +232,97 @@ function errorPage(message: string): string {
 }
 
 function successPage(token: string, user: DbUser, returnUrl?: string): string {
+  // 检查用户是否已有密码
+  const hasPassword = !!getDb().prepare('SELECT id FROM user_passwords WHERE user_id = ?').get(user.id);
+
   return `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>登录成功</title>
+<html><head><meta charset="utf-8"><title>注册/登录成功</title>
 <style>
   body { background: #0a0e1a; color: #fff; font-family: system-ui; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
-  .box { text-align: center; padding: 40px; border: 1px solid rgba(52,211,153,0.3); border-radius: 12px; background: rgba(52,211,153,0.05); max-width: 400px; }
-  h2 { color: #34d399; margin: 0 0 16px; }
-  p { color: rgba(255,255,255,0.7); line-height: 1.6; }
+  .box { text-align: center; padding: 40px; border: 1px solid rgba(52,211,153,0.3); border-radius: 12px; background: rgba(52,211,153,0.05); max-width: 420px; width: 90%; }
+  h2 { color: #34d399; margin: 0 0 12px; }
+  p { color: rgba(255,255,255,0.7); line-height: 1.6; margin: 6px 0; }
   .avatar { width: 64px; height: 64px; border-radius: 50%; border: 2px solid rgba(52,211,153,0.3); margin-bottom: 12px; }
-  .token { font-family: monospace; font-size: 10px; color: rgba(255,255,255,0.3); word-break: break-all; margin-top: 12px; }
+  .info { font-size: 13px; color: rgba(255,255,255,0.5); background: rgba(0,0,0,0.2); padding: 10px; border-radius: 8px; margin: 12px 0; text-align: left; }
+  .info b { color: rgba(77,201,246,0.8); }
+  .pwd-form { margin-top: 16px; }
+  .pwd-input { width: 80%; padding: 10px 14px; border-radius: 8px; border: 1px solid rgba(77,201,246,0.2); background: rgba(77,201,246,0.04); color: #fff; font-size: 14px; outline: none; text-align: center; }
+  .pwd-input:focus { border-color: rgba(77,201,246,0.5); }
+  .pwd-btn { display: inline-block; margin-top: 12px; padding: 10px 28px; border-radius: 8px; background: rgba(52,211,153,0.15); color: #34d399; border: 1px solid rgba(52,211,153,0.3); font-size: 14px; cursor: pointer; font-family: inherit; }
+  .pwd-btn:hover { background: rgba(52,211,153,0.25); }
+  .pwd-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .msg { margin-top: 10px; font-size: 12px; min-height: 20px; }
+  .msg.ok { color: #34d399; }
+  .msg.err { color: #f87171; }
+  .done { color: rgba(255,255,255,0.4); font-size: 12px; margin-top: 16px; }
 </style>
-<script>
-  // 方案1: postMessage 传递 token
-  try {
-    if (window.opener) {
-      window.opener.postMessage({ type: 'WORKSHOP_AUTH', token: '${token}' }, '*');
-    }
-  } catch(e) { console.error(e); }
-
-  // 方案2: 写入 localStorage（酒馆脚本会轮询检测）
-  try {
-    localStorage.setItem('workshop-auth-token', '${token}');
-  } catch(e) { console.error(e); }
-
-  // 2秒后自动关闭
-  setTimeout(() => window.close(), 2000);
-</script>
 </head><body>
 <div class="box">
   <img class="avatar" src="${user.discord_avatar}" alt="avatar" />
-  <h2>登录成功</h2>
+  <h2>${hasPassword ? '登录成功' : '注册成功'}</h2>
   <p>欢迎，${user.discord_display_name || user.discord_username}！</p>
-  <p>此窗口将自动关闭，请返回酒馆继续操作。</p>
-  <p class="token">如果窗口没有自动关闭，请手动关闭此页面。</p>
+  
+  <div class="info">
+    <div><b>用户名:</b> ${user.discord_username}</div>
+    <div><b>显示名:</b> ${user.discord_display_name || user.discord_username}</div>
+    <div><b>Discord ID:</b> ${user.discord_id}</div>
+  </div>
+
+  <div id="pwd-section">
+    ${hasPassword ? '<p>你已设置过密码，可以在酒馆脚本中用<b>用户名+密码</b>登录。</p><p>如需修改密码，在下方输入新密码：</p>' : '<p>请设置一个密码，之后可以在酒馆脚本中用<b>用户名+密码</b>直接登录：</p>'}
+    <div class="pwd-form">
+      <input id="pwd" class="pwd-input" type="password" placeholder="输入密码（至少4位）" />
+      <br/>
+      <button id="pwdBtn" class="pwd-btn" onclick="setPassword()">设置密码</button>
+      <div id="pwdMsg" class="msg"></div>
+    </div>
+  </div>
+
+  <p class="done">设置完密码后，请在酒馆创意工坊脚本中使用用户名和密码登录。</p>
 </div>
+
+<script>
+async function setPassword() {
+  const pwd = document.getElementById('pwd').value;
+  const msg = document.getElementById('pwdMsg');
+  const btn = document.getElementById('pwdBtn');
+  
+  if (!pwd || pwd.length < 4) {
+    msg.textContent = '密码至少4个字符';
+    msg.className = 'msg err';
+    return;
+  }
+  
+  btn.disabled = true;
+  btn.textContent = '设置中...';
+  
+  try {
+    const resp = await fetch('/auth/set-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ${token}' },
+      body: JSON.stringify({ password: pwd })
+    });
+    const data = await resp.json();
+    
+    if (resp.ok) {
+      msg.textContent = '密码设置成功！现在可以在酒馆脚本中用用户名 "${user.discord_username}" + 密码登录了。';
+      msg.className = 'msg ok';
+      btn.textContent = '已设置';
+      document.getElementById('pwd').disabled = true;
+    } else {
+      msg.textContent = data.error || '设置失败';
+      msg.className = 'msg err';
+      btn.disabled = false;
+      btn.textContent = '重试';
+    }
+  } catch(e) {
+    msg.textContent = '网络错误，请重试';
+    msg.className = 'msg err';
+    btn.disabled = false;
+    btn.textContent = '重试';
+  }
+}
+</script>
 </body></html>`;
 }
 

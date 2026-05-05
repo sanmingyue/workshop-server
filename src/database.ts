@@ -71,6 +71,13 @@ export function initDatabase(): Database.Database {
       FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS user_passwords (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_works_status ON works(status);
     CREATE INDEX IF NOT EXISTS idx_works_type ON works(type);
     CREATE INDEX IF NOT EXISTS idx_works_user ON works(user_id);
