@@ -90,9 +90,10 @@ router.get('/discord/callback', async (req: Request, res: Response) => {
 
     // 返回成功页面，页面中会把 token 传给酒馆脚本
     res.send(successPage(sessionToken, user, stateData.returnUrl));
-  } catch (err) {
+  } catch (err: any) {
     console.error('[Auth] Discord 登录失败:', err);
-    res.status(500).send(errorPage('登录失败，请重试'));
+    const errMsg = err?.message || String(err);
+    res.status(500).send(errorPage(`登录失败: ${errMsg}`));
   }
 });
 
