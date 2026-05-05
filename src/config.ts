@@ -1,30 +1,28 @@
-// 从环境变量读取配置
-export const config = {
-  port: parseInt(process.env.PORT || '8080', 10),
-  baseUrl: process.env.BASE_URL || 'http://localhost:3000',
+// 延迟读取环境变量（确保 Zeabur 运行时注入的变量能被正确读取）
+function env(key: string, defaultValue: string = ''): string {
+  return process.env[key] || defaultValue;
+}
 
-  // Discord OAuth2
+function envList(key: string): string[] {
+  return (process.env[key] || '').split(',').map((s: string) => s.trim()).filter(Boolean);
+}
+
+// 使用 getter 确保每次访问都从环境变量中读取最新值
+export const config = {
+  get port() { return parseInt(env('PORT', '8080'), 10); },
+  get baseUrl() { return env('BASE_URL', 'http://localhost:8080'); },
+
   discord: {
-    clientId: process.env.DISCORD_CLIENT_ID || '',
-    clientSecret: process.env.DISCORD_CLIENT_SECRET || '',
-    // 允许的 Discord 服务器 ID（逗号分隔）
-    guildIds: (process.env.DISCORD_GUILD_IDS || '').split(',').map(s => s.trim()).filter(Boolean),
-    redirectUri: '', // 运行时计算
+    get clientId() { return env('DISCORD_CLIENT_ID'); },
+    get clientSecret() { return env('DISCORD_CLIENT_SECRET'); },
+    get guildIds() { return envList('DISCORD_GUILD_IDS'); },
+    get redirectUri() { return `${env('BASE_URL', 'http://localhost:8080')}/auth/discord/callback`; },
   },
 
-  // 管理员 Discord ID（逗号分隔）
-  adminDiscordIds: (process.env.ADMIN_DISCORD_IDS || '').split(',').map(s => s.trim()).filter(Boolean),
+  get adminDiscordIds() { return envList('ADMIN_DISCORD_IDS'); },
+  get sessionSecret() { return env('SESSION_SECRET', 'workshop-default-secret-change-me'); },
+  get dataDir() { return env('DATA_DIR', '/data'); },
 
-  // 会话密钥
-  sessionSecret: process.env.SESSION_SECRET || 'workshop-default-secret-change-me',
-
-  // 数据存储路径（Zeabur 持久化磁盘挂载点）
-  dataDir: process.env.DATA_DIR || '/data',
-
-  // 上传限制
-  maxFileSize: 5 * 1024 * 1024, // 5MB 封面图
-  maxContentSize: 1024 * 1024,   // 1MB 文本内容
+  maxFileSize: 5 * 1024 * 1024,
+  maxContentSize: 1024 * 1024,
 };
-
-// 运行时计算重定向 URI
-config.discord.redirectUri = `${config.baseUrl}/auth/discord/callback`;

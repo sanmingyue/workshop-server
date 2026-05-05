@@ -79,7 +79,13 @@ app.get('/api/my/works', requireAuth, (req, res) => {
 
 // ─── 健康检查 ───
 app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', time: new Date().toISOString() });
+  res.json({
+    status: 'ok',
+    time: new Date().toISOString(),
+    base_url: config.baseUrl,
+    has_client_id: !!config.discord.clientId,
+    port: config.port,
+  });
 });
 
 // ─── 定期清理过期会话 ───
