@@ -156,13 +156,20 @@ function successPage(token: string, user: DbUser, returnUrl?: string): string {
   .token { font-family: monospace; font-size: 10px; color: rgba(255,255,255,0.3); word-break: break-all; margin-top: 12px; }
 </style>
 <script>
-  // 将 token 通过 postMessage 传递给酒馆脚本
+  // 方案1: postMessage 传递 token
   try {
     if (window.opener) {
       window.opener.postMessage({ type: 'WORKSHOP_AUTH', token: '${token}' }, '*');
-      setTimeout(() => window.close(), 2000);
     }
   } catch(e) { console.error(e); }
+
+  // 方案2: 写入 localStorage（酒馆脚本会轮询检测）
+  try {
+    localStorage.setItem('workshop-auth-token', '${token}');
+  } catch(e) { console.error(e); }
+
+  // 2秒后自动关闭
+  setTimeout(() => window.close(), 2000);
 </script>
 </head><body>
 <div class="box">
