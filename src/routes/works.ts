@@ -100,7 +100,7 @@ router.get('/tags', (_req: Request, res: Response) => {
 
 /** GET /api/works/:id - 获取单个作品详情 */
 router.get('/:id', (req: Request, res: Response) => {
-  const work = getWorkById(parseInt(req.params.id));
+  const work = getWorkById(parseInt(req.params.id as string));
   if (!work) {
     res.status(404).json({ error: '作品不存在' });
     return;
@@ -203,7 +203,7 @@ router.post('/', requireAuth, upload.single('cover'), (req: Request, res: Respon
 
 /** PUT /api/works/:id - 修改自己的作品 */
 router.put('/:id', requireAuth, upload.single('cover'), (req: Request, res: Response) => {
-  const work = getWorkById(parseInt(req.params.id));
+  const work = getWorkById(parseInt(req.params.id as string));
   if (!work || work.user_id !== req.user!.id) {
     res.status(404).json({ error: '作品不存在或无权修改' });
     return;
@@ -238,7 +238,7 @@ router.put('/:id', requireAuth, upload.single('cover'), (req: Request, res: Resp
 
 /** DELETE /api/works/:id - 删除自己的作品 */
 router.delete('/:id', requireAuth, (req: Request, res: Response) => {
-  const work = getWorkById(parseInt(req.params.id));
+  const work = getWorkById(parseInt(req.params.id as string));
   if (!work || work.user_id !== req.user!.id) {
     res.status(404).json({ error: '作品不存在或无权删除' });
     return;
@@ -256,7 +256,7 @@ router.delete('/:id', requireAuth, (req: Request, res: Response) => {
 
 /** POST /api/works/:id/like - 点赞/取消点赞 */
 router.post('/:id/like', requireAuth, (req: Request, res: Response) => {
-  const work = getWorkById(parseInt(req.params.id));
+  const work = getWorkById(parseInt(req.params.id as string));
   if (!work || work.status !== 'approved') {
     res.status(404).json({ error: '作品不存在' });
     return;
@@ -270,7 +270,7 @@ router.post('/:id/like', requireAuth, (req: Request, res: Response) => {
 
 /** GET /api/works/:id/download - 下载作品内容 */
 router.get('/:id/download', (req: Request, res: Response) => {
-  const work = getWorkById(parseInt(req.params.id));
+  const work = getWorkById(parseInt(req.params.id as string));
   if (!work || work.status !== 'approved') {
     res.status(404).json({ error: '作品不存在' });
     return;

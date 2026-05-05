@@ -48,7 +48,7 @@ router.get('/api/works/pending', requireAdmin, (_req: Request, res: Response) =>
 
 /** POST /admin/api/works/:id/approve - 审核通过 */
 router.post('/api/works/:id/approve', requireAdmin, (req: Request, res: Response) => {
-  const work = getWorkById(parseInt(req.params.id));
+  const work = getWorkById(parseInt(req.params.id as string));
   if (!work) { res.status(404).json({ error: '作品不存在' }); return; }
   approveWork(work.id, req.user!.id);
   res.json({ message: '已通过' });
@@ -56,7 +56,7 @@ router.post('/api/works/:id/approve', requireAdmin, (req: Request, res: Response
 
 /** POST /admin/api/works/:id/reject - 审核拒绝 */
 router.post('/api/works/:id/reject', requireAdmin, (req: Request, res: Response) => {
-  const work = getWorkById(parseInt(req.params.id));
+  const work = getWorkById(parseInt(req.params.id as string));
   if (!work) { res.status(404).json({ error: '作品不存在' }); return; }
   const reason = req.body.reason || '不符合要求';
   rejectWork(work.id, req.user!.id, reason);
@@ -65,7 +65,7 @@ router.post('/api/works/:id/reject', requireAdmin, (req: Request, res: Response)
 
 /** DELETE /admin/api/works/:id - 强制删除作品 */
 router.delete('/api/works/:id', requireAdmin, (req: Request, res: Response) => {
-  const work = getWorkById(parseInt(req.params.id));
+  const work = getWorkById(parseInt(req.params.id as string));
   if (!work) { res.status(404).json({ error: '作品不存在' }); return; }
 
   // 删除封面
@@ -85,7 +85,7 @@ router.get('/api/users', requireAdmin, (_req: Request, res: Response) => {
 
 /** POST /admin/api/users/:id/ban - 封禁/解封用户 */
 router.post('/api/users/:id/ban', requireAdmin, (req: Request, res: Response) => {
-  const userId = parseInt(req.params.id);
+  const userId = parseInt(req.params.id as string);
   const { banned } = req.body;
   banUser(userId, !!banned);
   res.json({ message: banned ? '已封禁' : '已解封' });
