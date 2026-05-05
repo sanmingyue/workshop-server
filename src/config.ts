@@ -1,6 +1,6 @@
 // 从环境变量读取配置
 export const config = {
-  port: parseInt(process.env.PORT || '3000', 10),
+  port: parseInt(process.env.PORT || '8080', 10),
   baseUrl: process.env.BASE_URL || 'http://localhost:3000',
 
   // Discord OAuth2

@@ -86,7 +86,7 @@ app.get('/health', (_req, res) => {
 setInterval(cleanExpiredSessions, 3600 * 1000); // 每小时清理一次
 
 // ─── 启动服务 ───
-app.listen(config.port, () => {
+app.listen(config.port, '0.0.0.0', () => {
   console.log(`[Workshop] 创意工坊后端已启动: http://localhost:${config.port}`);
   console.log(`[Workshop] 管理后台: ${config.baseUrl}/admin`);
   console.log(`[Workshop] Discord 回调: ${config.discord.redirectUri}`);
