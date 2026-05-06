@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import crypto from 'crypto';
 import { config } from '../config';
 import { getAuthUrl, exchangeCode, getDiscordUser, isInAllowedGuild, getAvatarUrl } from '../auth/discord';
-import { findUserByDiscordId, createUser, updateUserLogin, createSession, deleteSession, isAdmin, getDb, type DbUser } from '../database';
+import { findUserByDiscordId, createUser, updateUserLogin, createSession, deleteSession, getDb, type DbUser } from '../database';
 import { requireAuth } from '../auth/middleware';
 import { nowIso, recordAuditLog } from '../audit';
 
@@ -137,7 +137,7 @@ router.post('/login', (req: Request, res: Response) => {
         category: 'auth',
         action: 'password_login_failed',
         success: false,
-        detail: { reason: 'missing_credentials', username: username || '' },
+        detail: { 原因: '缺少用户名或密码', 用户名: username || '' },
       });
       res.status(400).json({ error: '请输入用户名和密码' });
       return;
@@ -155,7 +155,7 @@ router.post('/login', (req: Request, res: Response) => {
         category: 'auth',
         action: 'password_login_failed',
         success: false,
-        detail: { reason: 'user_not_found', username },
+        detail: { 原因: '用户不存在', 用户名: username },
       });
       res.status(401).json({ error: '用户不存在，请先通过 Discord 注册' });
       return;
@@ -175,7 +175,7 @@ router.post('/login', (req: Request, res: Response) => {
         entityType: 'user',
         entityId: user.id,
         success: false,
-        detail: { reason: 'password_not_set', username },
+        detail: { 原因: '尚未设置密码', 用户名: username },
       });
       res.status(401).json({ error: '未设置密码，请先通过 Discord 注册并设置密码' });
       return;
@@ -191,7 +191,7 @@ router.post('/login', (req: Request, res: Response) => {
         entityType: 'user',
         entityId: user.id,
         success: false,
-        detail: { reason: 'wrong_password', username },
+        detail: { 原因: '密码错误', 用户名: username },
       });
       res.status(401).json({ error: '密码错误' });
       return;
@@ -224,7 +224,7 @@ router.post('/login', (req: Request, res: Response) => {
       action: 'password_login',
       entityType: 'user',
       entityId: user.id,
-      detail: { username },
+      detail: { 用户名: username },
     });
 
     res.json({
@@ -236,7 +236,7 @@ router.post('/login', (req: Request, res: Response) => {
         display_name: user.discord_display_name,
         avatar: user.discord_avatar,
         role: user.role,
-        is_admin: isAdmin(user),
+        is_admin: false,
       },
     });
   } catch (err: any) {
@@ -270,8 +270,8 @@ router.post('/set-password', requireAuth, (req: Request, res: Response) => {
       entityType: 'user',
       entityId: req.user!.id,
       detail: {
-        password_length: String(password).length,
-        password_updated_at: updatedAt,
+        密码长度: String(password).length,
+        修改时间: updatedAt,
       },
     });
 
@@ -292,7 +292,7 @@ router.get('/me', requireAuth, (req: Request, res: Response) => {
     display_name: user.discord_display_name,
     avatar: user.discord_avatar,
     role: user.role,
-    is_admin: isAdmin(user),
+    is_admin: false,
     created_at: user.created_at,
   });
 });

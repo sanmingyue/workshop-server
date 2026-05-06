@@ -6,13 +6,67 @@ import { getDb, type DbUser } from './database';
 
 const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
 
+export type AuditCategory =
+  | 'auth'
+  | 'work'
+  | 'review'
+  | 'user'
+  | 'security'
+  | 'system'
+  | 'download'
+  | 'favorite'
+  | 'like'
+  | 'comment';
+
+const ACTION_LABELS: Record<string, string> = {
+  discord_registered: '用户通过 Discord 注册',
+  discord_login: '用户通过 Discord 登录',
+  discord_login_blocked_banned: '封禁用户 Discord 登录被拒绝',
+  password_login: '用户密码登录',
+  password_login_failed: '用户密码登录失败',
+  password_login_blocked_banned: '封禁用户密码登录被拒绝',
+  password_created: '用户设置密码',
+  password_changed: '用户修改密码',
+  logout: '用户退出登录',
+
+  work_created: '用户上传作品',
+  work_update_submitted: '作者提交作品更新',
+  work_soft_deleted_by_author: '作者软删除作品',
+  work_downloaded: '用户下载作品',
+  work_liked: '用户点赞作品',
+  work_unliked: '用户取消点赞',
+  work_favorited: '用户收藏作品',
+  work_unfavorited: '用户取消收藏',
+
+  comment_created: '用户发表评论',
+  comment_edited: '用户编辑评论',
+  comment_hidden_by_author: '作者隐藏评论',
+  comment_deleted_by_user: '用户删除自己的评论',
+  comment_hidden_by_admin: '管理员隐藏评论',
+  comment_deleted_by_admin: '管理员删除评论',
+
+  work_approved: '管理员审核通过作品',
+  work_rejected: '管理员驳回作品',
+  work_version_approved: '管理员审核通过作品版本',
+  work_version_rejected: '管理员驳回作品版本',
+  work_hidden_by_admin: '管理员隐藏作品',
+  work_restored_by_admin: '管理员恢复作品',
+  work_deleted_by_admin: '管理员真删除作品',
+
+  user_banned: '管理员封禁用户',
+  user_unbanned: '管理员解封用户',
+  password_revealed_by_admin: '管理员查阅用户密码',
+  audit_logs_downloaded: '管理员下载操作日志',
+};
+
 export interface AuditLogInput {
   req?: Request;
   actor?: DbUser;
   userId?: number | null;
   targetUserId?: number | null;
-  category: 'auth' | 'work' | 'review' | 'user' | 'security' | 'system';
+  category: AuditCategory;
   action: string;
+  actionLabel?: string;
   entityType?: string;
   entityId?: string | number | null;
   success?: boolean;
@@ -30,6 +84,7 @@ export interface AuditLogRow {
   target_display_name?: string;
   category: string;
   action: string;
+  action_label: string;
   entity_type: string;
   entity_id: string;
   success: number;
@@ -44,6 +99,8 @@ export interface AuditLogFilters {
   date?: string;
   category?: string;
   action?: string;
+  entityType?: string;
+  entityId?: string | number;
   page?: number;
   pageSize?: number;
 }
@@ -57,6 +114,10 @@ export function toLogDate(iso: string = nowIso()): string {
   return new Date(time + SHANGHAI_OFFSET_MS).toISOString().slice(0, 10);
 }
 
+export function getActionLabel(action: string): string {
+  return ACTION_LABELS[action] || action;
+}
+
 function getRequestIp(req?: Request): string {
   if (!req) return '';
   const forwarded = req.headers['x-forwarded-for'];
@@ -67,11 +128,11 @@ function getRequestIp(req?: Request): string {
 
 function stringifyDetail(detail: AuditLogInput['detail']): string {
   if (detail == null) return '{}';
-  if (typeof detail === 'string') return JSON.stringify({ message: detail });
+  if (typeof detail === 'string') return JSON.stringify({ 说明: detail });
   try {
     return JSON.stringify(detail);
   } catch {
-    return JSON.stringify({ message: 'detail_unserializable' });
+    return JSON.stringify({ 说明: '详情无法序列化' });
   }
 }
 
@@ -79,7 +140,7 @@ function parseDetail(detail: string): unknown {
   try {
     return JSON.parse(detail || '{}');
   } catch {
-    return { raw: detail };
+    return { 原始内容: detail };
   }
 }
 
@@ -105,12 +166,13 @@ export function recordAuditLog(input: AuditLogInput): void {
     const ip = getRequestIp(input.req);
     const userAgent = input.req?.headers['user-agent'] || '';
     const entityId = input.entityId == null ? '' : String(input.entityId);
+    const actionLabel = input.actionLabel || getActionLabel(input.action);
 
     const result = getDb().prepare(`
       INSERT INTO audit_logs (
         log_date, user_id, actor_username, actor_display_name, target_user_id,
-        category, action, entity_type, entity_id, success, detail, ip, user_agent, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        category, action, action_label, entity_type, entity_id, success, detail, ip, user_agent, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       logDate,
       userId,
@@ -119,6 +181,7 @@ export function recordAuditLog(input: AuditLogInput): void {
       input.targetUserId ?? null,
       input.category,
       input.action,
+      actionLabel,
       input.entityType || '',
       entityId,
       input.success === false ? 0 : 1,
@@ -137,6 +200,7 @@ export function recordAuditLog(input: AuditLogInput): void {
       target_user_id: input.targetUserId ?? null,
       category: input.category,
       action: input.action,
+      action_label: actionLabel,
       entity_type: input.entityType || '',
       entity_id: entityId,
       success: input.success === false ? 0 : 1,
@@ -173,8 +237,16 @@ export function queryAuditLogs(filters: AuditLogFilters): {
     params.push(filters.category);
   }
   if (filters.action) {
-    where.push('l.action LIKE ?');
-    params.push(`%${filters.action}%`);
+    where.push('(l.action LIKE ? OR l.action_label LIKE ?)');
+    params.push(`%${filters.action}%`, `%${filters.action}%`);
+  }
+  if (filters.entityType) {
+    where.push('l.entity_type = ?');
+    params.push(filters.entityType);
+  }
+  if (filters.entityId !== undefined) {
+    where.push('l.entity_id = ?');
+    params.push(String(filters.entityId));
   }
 
   const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
@@ -219,11 +291,11 @@ export function serializeAuditLogs(logs: AuditLogRow[], format: 'json' | 'txt'):
   }
 
   return logs.map(log => {
-    const actor = log.actor_display_name || log.actor_username || (log.user_id == null ? 'anonymous' : `user#${log.user_id}`);
-    const target = log.target_display_name || log.target_username || (log.target_user_id == null ? '' : `user#${log.target_user_id}`);
+    const actor = log.actor_display_name || log.actor_username || (log.user_id == null ? '匿名/未识别用户' : `用户#${log.user_id}`);
+    const target = log.target_display_name || log.target_username || (log.target_user_id == null ? '' : `用户#${log.target_user_id}`);
     const entity = log.entity_type ? `${log.entity_type}:${log.entity_id}` : '';
-    const targetPart = target ? ` target=${target}` : '';
-    const entityPart = entity ? ` entity=${entity}` : '';
-    return `[${log.created_at}] [${log.log_date}] ${actor} ${log.category}.${log.action}${targetPart}${entityPart} success=${!!log.success} ip=${log.ip} detail=${JSON.stringify(parseDetail(log.detail))}`;
+    const targetPart = target ? ` 目标=${target}` : '';
+    const entityPart = entity ? ` 对象=${entity}` : '';
+    return `[${log.created_at}] [${log.log_date}] ${actor} ${log.action_label}${targetPart}${entityPart} 结果=${log.success ? '成功' : '失败'} IP=${log.ip} 详情=${JSON.stringify(parseDetail(log.detail))}`;
   }).join('\n');
 }

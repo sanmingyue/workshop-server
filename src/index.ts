@@ -3,7 +3,7 @@ import cors from 'cors';
 import path from 'path';
 import rateLimit from 'express-rate-limit';
 import { config } from './config';
-import { initDatabase, cleanExpiredSessions, getUserWorks } from './database';
+import { initDatabase, cleanExpiredSessions, getUserDownloads, getUserFavorites, getUserWorks } from './database';
 import { requireAuth } from './auth/middleware';
 import authRoutes from './routes/auth';
 import worksRoutes from './routes/works';
@@ -70,13 +70,29 @@ app.get('/api/my/works', requireAuth, (req, res) => {
       card_link: w.card_link || '',
       file_type: w.file_type || 'json',
       status: w.status,
+      visibility: w.visibility,
+      hidden_reason: w.hidden_reason || '',
+      author_delete_reason: w.author_delete_reason || '',
       reject_reason: w.reject_reason,
+      pending_update: !!w.pending_version_id,
+      pending_version_id: w.pending_version_id || null,
+      pending_version_no: w.pending_version_no || null,
       download_count: w.download_count,
       like_count: w.like_count,
+      favorite_count: w.favorite_count || 0,
+      comment_count: w.comment_count || 0,
       created_at: w.created_at,
       updated_at: w.updated_at,
     })),
   });
+});
+
+app.get('/api/my/downloads', requireAuth, (req, res) => {
+  res.json({ downloads: getUserDownloads(req.user!.id) });
+});
+
+app.get('/api/my/favorites', requireAuth, (req, res) => {
+  res.json({ favorites: getUserFavorites(req.user!.id) });
 });
 
 // ─── 健康检查 ───

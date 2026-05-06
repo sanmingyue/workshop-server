@@ -8,40 +8,38 @@ export function adminPageHtml(): string {
 <style>
 * { box-sizing: border-box; }
 body { margin: 0; min-height: 100vh; background: #0b1020; color: #e5e7eb; font-family: "Segoe UI", system-ui, sans-serif; }
-button, input, select { font: inherit; }
+button, input, select, textarea { font: inherit; }
 .header { position: sticky; top: 0; z-index: 20; background: rgba(11,16,32,.96); border-bottom: 1px solid rgba(148,163,184,.16); padding: 14px 22px; display: flex; align-items: center; gap: 14px; }
 .header h1 { margin: 0; font-size: 18px; color: #67e8f9; font-weight: 700; }
 .header .note { margin-left: auto; color: rgba(226,232,240,.48); font-size: 12px; }
-.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; padding: 16px 22px 8px; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 10px; padding: 16px 22px 8px; }
 .stat { border: 1px solid rgba(148,163,184,.16); background: rgba(15,23,42,.78); border-radius: 8px; padding: 12px 14px; }
 .stat .num { color: #67e8f9; font-size: 24px; font-weight: 800; line-height: 1; }
 .stat .label { color: rgba(226,232,240,.56); font-size: 12px; margin-top: 7px; }
 .tabs { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 22px 0; border-bottom: 1px solid rgba(148,163,184,.12); }
-.tab { appearance: none; border: 1px solid transparent; border-bottom: 2px solid transparent; background: transparent; color: rgba(226,232,240,.58); padding: 9px 12px; cursor: pointer; border-radius: 6px 6px 0 0; font-size: 13px; }
+.tab { border: 1px solid transparent; border-bottom: 2px solid transparent; background: transparent; color: rgba(226,232,240,.58); padding: 9px 12px; cursor: pointer; border-radius: 6px 6px 0 0; font-size: 13px; }
 .tab:hover { color: #e5e7eb; background: rgba(148,163,184,.08); }
 .tab.active { color: #67e8f9; background: rgba(103,232,249,.08); border-color: rgba(103,232,249,.18); border-bottom-color: #67e8f9; }
 .toolbar { padding: 14px 22px 0; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .toolbar input, .toolbar select { min-height: 34px; border: 1px solid rgba(148,163,184,.22); border-radius: 6px; background: rgba(15,23,42,.82); color: #e5e7eb; padding: 6px 9px; }
 .content { padding: 16px 22px 28px; }
 .grid { display: grid; gap: 12px; }
-.work { border: 1px solid rgba(148,163,184,.14); background: rgba(15,23,42,.72); border-radius: 8px; padding: 14px; display: grid; grid-template-columns: 86px minmax(0, 1fr); gap: 14px; }
-.work.no-cover { grid-template-columns: minmax(0, 1fr); }
+.card { border: 1px solid rgba(148,163,184,.14); background: rgba(15,23,42,.72); border-radius: 8px; padding: 14px; display: grid; grid-template-columns: 86px minmax(0, 1fr); gap: 14px; }
+.card.no-cover { grid-template-columns: minmax(0, 1fr); }
 .cover { width: 86px; height: 86px; object-fit: cover; border-radius: 8px; border: 1px solid rgba(148,163,184,.16); }
-.work-head { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.head { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .title { font-weight: 700; color: #f8fafc; }
 .meta, .small { color: rgba(226,232,240,.50); font-size: 12px; }
 .desc { color: rgba(226,232,240,.68); font-size: 13px; margin-top: 8px; line-height: 1.5; }
-.preview { margin-top: 10px; max-height: 110px; overflow: auto; background: rgba(2,6,23,.62); border: 1px solid rgba(148,163,184,.10); border-radius: 6px; padding: 9px; color: rgba(226,232,240,.60); font: 12px/1.5 Consolas, monospace; white-space: pre-wrap; word-break: break-all; }
+.preview { margin-top: 10px; max-height: 130px; overflow: auto; background: rgba(2,6,23,.62); border: 1px solid rgba(148,163,184,.10); border-radius: 6px; padding: 9px; color: rgba(226,232,240,.60); font: 12px/1.5 Consolas, monospace; white-space: pre-wrap; word-break: break-all; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .badge { display: inline-flex; align-items: center; min-height: 20px; border-radius: 5px; padding: 2px 7px; font-size: 11px; font-weight: 700; }
-.status-pending { color: #facc15; background: rgba(250,204,21,.12); }
-.status-approved { color: #34d399; background: rgba(52,211,153,.12); }
-.status-rejected { color: #fb7185; background: rgba(251,113,133,.12); }
-.type-regex { color: #60a5fa; background: rgba(96,165,250,.13); }
-.type-persona { color: #34d399; background: rgba(52,211,153,.13); }
-.type-card_addon { color: #c084fc; background: rgba(192,132,252,.13); }
-.type-worldbook { color: #fbbf24; background: rgba(251,191,36,.13); }
-.type-collection { color: #fb923c; background: rgba(251,146,60,.13); }
+.yellow { color: #facc15; background: rgba(250,204,21,.12); }
+.green { color: #34d399; background: rgba(52,211,153,.12); }
+.red { color: #fb7185; background: rgba(251,113,133,.12); }
+.blue { color: #60a5fa; background: rgba(96,165,250,.13); }
+.purple { color: #c084fc; background: rgba(192,132,252,.13); }
+.orange { color: #fb923c; background: rgba(251,146,60,.13); }
 .btn { border: 1px solid rgba(103,232,249,.24); background: rgba(103,232,249,.08); color: #67e8f9; border-radius: 6px; padding: 7px 12px; cursor: pointer; min-height: 32px; }
 .btn:hover { background: rgba(103,232,249,.16); }
 .btn.ok { color: #34d399; border-color: rgba(52,211,153,.38); background: rgba(52,211,153,.10); }
@@ -53,13 +51,13 @@ button, input, select { font: inherit; }
 .table tr:last-child td { border-bottom: 0; }
 .avatar { width: 32px; height: 32px; border-radius: 50%; vertical-align: middle; margin-right: 8px; }
 .secret { display: inline-block; min-width: 120px; color: #34d399; font-family: Consolas, monospace; word-break: break-all; }
-.log-detail { max-width: 420px; white-space: pre-wrap; word-break: break-word; color: rgba(226,232,240,.58); font-family: Consolas, monospace; font-size: 12px; }
+.log-detail { max-width: 460px; white-space: pre-wrap; word-break: break-word; color: rgba(226,232,240,.58); font-family: Consolas, monospace; font-size: 12px; }
 .empty { border: 1px dashed rgba(148,163,184,.22); border-radius: 8px; padding: 34px; text-align: center; color: rgba(226,232,240,.48); }
 .error { color: #fb7185; padding: 12px; border: 1px solid rgba(251,113,133,.24); background: rgba(251,113,133,.08); border-radius: 8px; }
 @media (max-width: 720px) {
   .header { align-items: flex-start; flex-direction: column; }
   .header .note { margin-left: 0; }
-  .work { grid-template-columns: 1fr; }
+  .card { grid-template-columns: 1fr; }
   .cover { width: 100%; height: 160px; }
   .table { display: block; overflow-x: auto; }
 }
@@ -68,7 +66,7 @@ button, input, select { font: inherit; }
 <body>
 <div class="header">
   <h1>创意工坊 - 管理后台</h1>
-  <div class="note">审核、账号、审计日志分区管理</div>
+  <div class="note">后台保留完整数据；前端管理员仍按普通用户处理</div>
 </div>
 <div class="stats" id="stats"></div>
 <div class="tabs" id="tabs"></div>
@@ -76,56 +74,44 @@ button, input, select { font: inherit; }
 <main class="content" id="content"></main>
 
 <script>
-const TYPE_CONFIG = {
-  regex: { label: '美化正则' },
-  persona: { label: '人设' },
-  card_addon: { label: '角色卡配套' },
-  worldbook: { label: '共享世界书' },
-  collection: { label: '作者合集' }
-};
+const TYPE_LABELS = { regex: '美化正则', persona: '人设', card_addon: '角色卡配套', worldbook: '共享世界书', collection: '作者合集' };
 const STATUS_LABELS = { pending: '待审核', approved: '已通过', rejected: '已驳回' };
-const CATEGORY_LABELS = { auth: '认证', work: '作品', review: '审核', user: '用户', security: '安全', system: '系统' };
+const VISIBILITY_LABELS = { public: '公开', hidden: '后台隐藏', author_deleted: '作者软删除' };
+const CATEGORY_LABELS = { auth: '认证', work: '作品', review: '审核', user: '用户', security: '安全', system: '系统', download: '下载', favorite: '收藏', like: '点赞', comment: '评论' };
 const TABS = [
-  { id: 'pending', label: '待审核', status: 'pending' },
-  { id: 'approved', label: '已通过', status: 'approved' },
-  { id: 'rejected', label: '已驳回', status: 'rejected' },
-  { id: 'all', label: '全部作品' },
-  { id: 'regex', label: '正则', type: 'regex' },
-  { id: 'persona', label: '人设', type: 'persona' },
-  { id: 'card_addon', label: '配套', type: 'card_addon' },
-  { id: 'worldbook', label: '世界书', type: 'worldbook' },
-  { id: 'collection', label: '合集', type: 'collection' },
+  { id: 'overview', label: '总览' },
+  { id: 'pending-new', label: '新作品待审' },
+  { id: 'pending-update', label: '更新待审' },
+  { id: 'approved', label: '公开作品' },
+  { id: 'hidden', label: '隐藏作品' },
+  { id: 'author-deleted', label: '作者软删除' },
+  { id: 'rejected', label: '驳回作品' },
   { id: 'users', label: '用户账号' },
-  { id: 'logs', label: '操作日志' },
-  { id: 'stats', label: '系统统计' }
+  { id: 'comments', label: '评论管理' },
+  { id: 'downloads', label: '下载记录' },
+  { id: 'favorites', label: '收藏记录' },
+  { id: 'likes', label: '点赞记录' },
+  { id: 'logs', label: '操作日志' }
 ];
 
-let currentTab = 'pending';
+let currentTab = 'overview';
 let cachedUsers = [];
 let logFilters = { date: todayChina(), user_id: '', category: '', action: '' };
 
-function todayChina() {
-  return new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
-}
-
+function todayChina() { return new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10); }
+function esc(value) { if (value == null) return ''; const d = document.createElement('div'); d.textContent = String(value); return d.innerHTML; }
 async function api(path, opts) {
   const options = opts || {};
-  const resp = await fetch(path, {
-    ...options,
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }
-  });
+  const resp = await fetch(path, { ...options, credentials: 'include', headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
   const data = await resp.json().catch(function() { return {}; });
   if (!resp.ok) throw new Error(data.error || '请求失败');
   return data;
 }
 
-function esc(value) {
-  if (value == null) return '';
-  const d = document.createElement('div');
-  d.textContent = String(value);
-  return d.innerHTML;
-}
+function badge(text, cls) { return '<span class="badge ' + cls + '">' + esc(text) + '</span>'; }
+function typeBadge(type) { return badge(TYPE_LABELS[type] || type, type === 'collection' ? 'orange' : type === 'card_addon' ? 'purple' : type === 'worldbook' ? 'yellow' : type === 'persona' ? 'green' : 'blue'); }
+function statusBadge(status) { return badge(STATUS_LABELS[status] || status, status === 'approved' ? 'green' : status === 'rejected' ? 'red' : 'yellow'); }
+function visibilityBadge(v) { return badge(VISIBILITY_LABELS[v] || v, v === 'hidden' ? 'yellow' : v === 'author_deleted' ? 'red' : 'green'); }
 
 function renderTabs() {
   document.getElementById('tabs').innerHTML = TABS.map(function(tab) {
@@ -137,14 +123,15 @@ async function loadStats() {
   const data = await api('/admin/api/stats');
   const cards = [
     ['总用户', data.totalUsers],
-    ['已通过作品', data.totalWorks],
-    ['待审核', data.pendingWorks],
-    ['今日上传', data.todayUploads]
+    ['公开作品', data.totalWorks],
+    ['待审版本', data.pendingWorks],
+    ['隐藏作品', data.hiddenWorks],
+    ['作者软删除', data.authorDeletedWorks],
+    ['总下载', data.totalDownloads],
+    ['总收藏', data.totalFavorites],
+    ['总评论', data.totalComments],
+    ['今日投稿/更新', data.todayUploads]
   ];
-  Object.keys(TYPE_CONFIG).forEach(function(type) {
-    const count = (data.pendingByType || {})[type] || 0;
-    if (count > 0) cards.push(['待审 · ' + TYPE_CONFIG[type].label, count]);
-  });
   document.getElementById('stats').innerHTML = cards.map(function(card) {
     return '<div class="stat"><div class="num">' + esc(card[1]) + '</div><div class="label">' + esc(card[0]) + '</div></div>';
   }).join('');
@@ -169,32 +156,12 @@ function renderToolbar() {
       '<select id="logCategory"><option value="">全部分类</option>' + Object.keys(CATEGORY_LABELS).map(function(k) {
         return '<option value="' + k + '"' + (k === logFilters.category ? ' selected' : '') + '>' + CATEGORY_LABELS[k] + '</option>';
       }).join('') + '</select>' +
-      '<input id="logAction" placeholder="操作关键词" value="' + esc(logFilters.action) + '" />' +
+      '<input id="logAction" placeholder="中文操作关键词" value="' + esc(logFilters.action) + '" />' +
       '<button class="btn" onclick="applyLogFilters()">筛选</button>' +
       '<button class="btn ok" onclick="downloadLogs(\\'txt\\')">下载 TXT</button>' +
       '<button class="btn" onclick="downloadLogs(\\'json\\')">下载 JSON</button>';
-  } else if (currentTab === 'users') {
-    el.innerHTML = '<button class="btn" onclick="loadContent()">刷新用户</button>';
   } else {
-    el.innerHTML = '<button class="btn" onclick="loadContent()">刷新列表</button>';
-  }
-}
-
-async function loadContent() {
-  try {
-    if (currentTab === 'users' || currentTab === 'logs') await ensureUsers();
-    if (currentTab === 'users') return loadUsers();
-    if (currentTab === 'logs') return loadLogs();
-    if (currentTab === 'stats') return loadSystemStats();
-
-    const tab = TABS.find(function(item) { return item.id === currentTab; }) || {};
-    const params = new URLSearchParams();
-    if (tab.status) params.set('status', tab.status);
-    if (tab.type) params.set('type', tab.type);
-    const data = await api('/admin/api/works?' + params.toString());
-    renderWorks(data.works || []);
-  } catch (err) {
-    document.getElementById('content').innerHTML = '<div class="error">' + esc(err.message || err) + '</div>';
+    el.innerHTML = '<button class="btn" onclick="loadContent()">刷新</button>';
   }
 }
 
@@ -204,89 +171,168 @@ async function ensureUsers() {
   if (currentTab === 'logs') renderToolbar();
 }
 
-function renderWorks(works) {
-  const el = document.getElementById('content');
-  if (!works.length) {
-    el.innerHTML = '<div class="empty">当前分类没有作品</div>';
-    return;
+async function loadContent() {
+  try {
+    if (currentTab === 'logs' || currentTab === 'users') await ensureUsers();
+    if (currentTab === 'overview') return loadOverview();
+    if (currentTab === 'pending-new') return loadVersions('new');
+    if (currentTab === 'pending-update') return loadVersions('update');
+    if (currentTab === 'approved') return loadWorks('?status=approved&visibility=public');
+    if (currentTab === 'hidden') return loadWorks('?visibility=hidden');
+    if (currentTab === 'author-deleted') return loadWorks('?visibility=author_deleted');
+    if (currentTab === 'rejected') return loadWorks('?status=rejected');
+    if (currentTab === 'users') return loadUsers();
+    if (currentTab === 'comments') return loadComments();
+    if (currentTab === 'downloads') return loadDownloads();
+    if (currentTab === 'favorites') return loadFavorites();
+    if (currentTab === 'likes') return loadLikes();
+    if (currentTab === 'logs') return loadLogs();
+  } catch (err) {
+    document.getElementById('content').innerHTML = '<div class="error">' + esc(err.message || err) + '</div>';
   }
-  el.innerHTML = '<div class="grid">' + works.map(renderWorkCard).join('') + '</div>';
+}
+
+async function loadOverview() {
+  const data = await api('/admin/api/stats');
+  const rows = [
+    ['公开作品', data.totalWorks],
+    ['待审版本', data.pendingWorks],
+    ['隐藏作品', data.hiddenWorks],
+    ['作者软删除作品', data.authorDeletedWorks],
+    ['下载记录', data.totalDownloads],
+    ['收藏记录', data.totalFavorites],
+    ['评论记录', data.totalComments]
+  ];
+  document.getElementById('content').innerHTML = renderTable(['项目', '数量'], rows);
+}
+
+async function loadVersions(kind) {
+  const data = await api('/admin/api/versions?status=pending&kind=' + kind);
+  const versions = data.versions || [];
+  if (!versions.length) return empty('没有待审核版本');
+  document.getElementById('content').innerHTML = '<div class="grid">' + versions.map(renderVersionCard).join('') + '</div>';
+}
+
+function renderVersionCard(v) {
+  const cover = v.cover_url ? '<img class="cover" src="' + esc(v.cover_url) + '" />' : '';
+  return '<article class="card ' + (cover ? '' : 'no-cover') + '">' + cover +
+    '<div><div class="head"><span class="title">' + esc(v.title) + '</span>' + typeBadge(v.type) + statusBadge(v.status) + badge('v' + v.version_no, 'blue') + '</div>' +
+    '<div class="meta">作品ID：' + esc(v.work_id) + ' | 作者：' + esc(v.author_display_name || v.author_username) + ' | 提交：' + esc(v.created_at) + '</div>' +
+    '<div class="desc">' + esc(v.description || '') + '</div>' +
+    '<div class="preview">' + esc((v.content || '').slice(0, 900)) + '</div>' +
+    '<div class="actions"><button class="btn ok" onclick="approveVersion(' + v.id + ')">通过该版本</button><button class="btn warn" onclick="rejectVersion(' + v.id + ')">驳回该版本</button></div></div></article>';
+}
+
+async function loadWorks(query) {
+  const data = await api('/admin/api/works' + (query || ''));
+  const works = data.works || [];
+  if (!works.length) return empty('没有作品');
+  document.getElementById('content').innerHTML = '<div class="grid">' + works.map(renderWorkCard).join('') + '</div>';
 }
 
 function renderWorkCard(w) {
-  const typeLabel = (TYPE_CONFIG[w.type] || { label: w.type }).label;
-  const statusLabel = STATUS_LABELS[w.status] || w.status;
-  const cover = w.cover_url ? '<img class="cover" src="' + esc(w.cover_url) + '" onerror="this.remove()" />' : '';
-  const reject = w.reject_reason ? '<div class="small" style="color:#fb7185;margin-top:6px;">驳回原因：' + esc(w.reject_reason) + '</div>' : '';
-  const cardLink = w.card_link ? '<div class="small">角色卡链接：<a href="' + esc(w.card_link) + '" target="_blank" style="color:#93c5fd;">' + esc(w.card_link) + '</a></div>' : '';
+  const cover = w.cover_url ? '<img class="cover" src="' + esc(w.cover_url) + '" />' : '';
+  const reason = w.visibility === 'hidden' ? '<div class="small" style="color:#facc15;">隐藏理由：' + esc(w.hidden_reason || '') + '</div>' :
+    w.visibility === 'author_deleted' ? '<div class="small" style="color:#fb7185;">作者删除理由：' + esc(w.author_delete_reason || '') + '</div>' : '';
   let actions = '';
-  if (w.status === 'pending') {
-    actions += '<button class="btn ok" onclick="approveWork(' + w.id + ')">通过</button>';
-    actions += '<button class="btn warn" onclick="rejectWork(' + w.id + ')">驳回</button>';
-  }
-  actions += '<button class="btn danger" onclick="deleteWork(' + w.id + ')">删除</button>';
-  return '<article class="work ' + (cover ? '' : 'no-cover') + '">' + cover +
-    '<div><div class="work-head"><span class="title">' + esc(w.title) + '</span>' +
-    '<span class="badge type-' + esc(w.type) + '">' + esc(typeLabel) + '</span>' +
-    '<span class="badge status-' + esc(w.status) + '">' + esc(statusLabel) + '</span></div>' +
-    '<div class="meta">作者：' + esc(w.author_display_name || w.author_username) + ' | ID：' + w.id + ' | 创建：' + esc(w.created_at) + '</div>' +
-    cardLink + '<div class="desc">' + esc(w.description || '') + '</div>' + reject +
-    '<div class="preview">' + esc((w.content || '').slice(0, 700)) + '</div>' +
-    '<div class="actions">' + actions + '</div></div></article>';
+  if (w.pending_version_id) actions += '<button class="btn ok" onclick="approveVersion(' + w.pending_version_id + ')">通过待审版本</button><button class="btn warn" onclick="rejectVersion(' + w.pending_version_id + ')">驳回待审版本</button>';
+  if (w.visibility !== 'hidden') actions += '<button class="btn warn" onclick="hideWork(' + w.id + ')">隐藏</button>';
+  if (w.visibility !== 'public') actions += '<button class="btn ok" onclick="restoreWork(' + w.id + ')">恢复公开</button>';
+  actions += '<button class="btn danger" onclick="deleteWorkHard(' + w.id + ')">真删除</button>';
+  actions += '<button class="btn" onclick="traceWork(' + w.id + ')">追溯</button>';
+  return '<article class="card ' + (cover ? '' : 'no-cover') + '">' + cover +
+    '<div><div class="head"><span class="title">' + esc(w.title) + '</span>' + typeBadge(w.type) + statusBadge(w.status) + visibilityBadge(w.visibility) + '</div>' +
+    '<div class="meta">ID：' + w.id + ' | 作者：' + esc(w.author_display_name || w.author_username) + ' | 下载 ' + esc(w.download_count) + ' | 收藏 ' + esc(w.favorite_count || 0) + ' | 点赞 ' + esc(w.like_count) + ' | 评论 ' + esc(w.comment_count || 0) + '</div>' +
+    reason + '<div class="desc">' + esc(w.description || '') + '</div>' +
+    '<div class="preview">' + esc((w.content || '').slice(0, 800)) + '</div><div class="actions">' + actions + '</div></div></article>';
 }
 
-async function approveWork(id) {
-  if (!confirm('确定通过该作品？')) return;
-  await api('/admin/api/works/' + id + '/approve', { method: 'POST' });
-  await loadStats();
-  await loadContent();
+async function approveVersion(id) {
+  if (!confirm('确定通过该版本？')) return;
+  await api('/admin/api/versions/' + id + '/approve', { method: 'POST' });
+  await loadStats(); await loadContent();
 }
-
-async function rejectWork(id) {
+async function rejectVersion(id) {
   const reason = prompt('请输入驳回原因');
   if (!reason || !reason.trim()) return;
-  await api('/admin/api/works/' + id + '/reject', { method: 'POST', body: JSON.stringify({ reason: reason.trim() }) });
-  await loadStats();
-  await loadContent();
+  await api('/admin/api/versions/' + id + '/reject', { method: 'POST', body: JSON.stringify({ reason: reason.trim() }) });
+  await loadStats(); await loadContent();
 }
-
-async function deleteWork(id) {
-  if (!confirm('确定永久删除该作品？')) return;
-  await api('/admin/api/works/' + id, { method: 'DELETE' });
-  await loadStats();
-  await loadContent();
+async function hideWork(id) {
+  const reason = prompt('请输入隐藏理由');
+  if (!reason || !reason.trim()) return;
+  await api('/admin/api/works/' + id + '/hide', { method: 'POST', body: JSON.stringify({ reason: reason.trim() }) });
+  await loadStats(); await loadContent();
+}
+async function restoreWork(id) {
+  if (!confirm('确定恢复公开？')) return;
+  await api('/admin/api/works/' + id + '/restore', { method: 'POST' });
+  await loadStats(); await loadContent();
+}
+async function deleteWorkHard(id) {
+  const reason = prompt('真删除会清除作品和关联数据，但操作日志保留。请输入理由确认：');
+  if (!reason || !reason.trim()) return;
+  await api('/admin/api/works/' + id, { method: 'DELETE', body: JSON.stringify({ reason: reason.trim() }) });
+  await loadStats(); await loadContent();
 }
 
 function loadUsers() {
   const rows = cachedUsers.map(function(u) {
     const name = u.discord_display_name || u.discord_username;
-    const state = u.banned ? '<span class="badge status-rejected">已封禁</span>' : '<span class="badge status-approved">正常</span>';
-    const pwdState = u.password_available
-      ? '<span class="small">已设置，长度 ' + esc(u.password_length || 0) + '，更新：' + esc(u.password_updated_at || '未知') + '</span>'
-      : '<span class="small">未设置密码</span>';
-    const banBtn = u.banned
-      ? '<button class="btn" onclick="toggleBan(' + u.id + ', false)">解封</button>'
-      : '<button class="btn danger" onclick="toggleBan(' + u.id + ', true)">封禁</button>';
-    return '<tr><td><img class="avatar" src="' + esc(u.discord_avatar || '') + '" />' + esc(name) +
-      '<div class="small">' + esc(u.discord_username) + ' | ' + esc(u.discord_id) + '</div></td>' +
-      '<td>' + esc(u.role) + '</td><td>' + state + '</td><td>' + pwdState + '<div><span id="pwd-' + u.id + '" class="secret"></span></div></td>' +
-      '<td><button class="btn warn" onclick="revealPassword(' + u.id + ')">手动查阅密码</button> ' + banBtn + '</td></tr>';
-  }).join('');
-  document.getElementById('content').innerHTML = '<table class="table"><thead><tr><th>用户</th><th>角色</th><th>状态</th><th>密码</th><th>操作</th></tr></thead><tbody>' + rows + '</tbody></table>';
+    const state = u.banned ? badge('已封禁', 'red') : badge('正常', 'green');
+    const pwdState = u.password_available ? '已设置，长度 ' + esc(u.password_length || 0) + '，更新：' + esc(u.password_updated_at || '未知') : '未设置密码';
+    const banBtn = u.banned ? '<button class="btn" onclick="toggleBan(' + u.id + ', false)">解封</button>' : '<button class="btn danger" onclick="toggleBan(' + u.id + ', true)">封禁</button>';
+    return ['<img class="avatar" src="' + esc(u.discord_avatar || '') + '" />' + esc(name) + '<div class="small">' + esc(u.discord_username) + ' | ' + esc(u.discord_id) + '</div>', esc(u.role), state, pwdState + '<div><span id="pwd-' + u.id + '" class="secret"></span></div>', '<button class="btn warn" onclick="revealPassword(' + u.id + ')">手动查阅密码</button> ' + banBtn + ' <button class="btn" onclick="traceUser(' + u.id + ')">追溯</button>'];
+  });
+  document.getElementById('content').innerHTML = renderTable(['用户', '角色', '状态', '密码', '操作'], rows, true);
 }
 
 async function revealPassword(userId) {
   if (!confirm('确认查阅该用户密码？本次查阅会写入操作日志。')) return;
   const data = await api('/admin/api/users/' + userId + '/password', { method: 'POST' });
-  const el = document.getElementById('pwd-' + userId);
-  el.textContent = data.password || '未设置';
+  document.getElementById('pwd-' + userId).textContent = data.password || '未设置';
 }
-
 async function toggleBan(id, banned) {
   if (!confirm(banned ? '确定封禁该用户？' : '确定解封该用户？')) return;
   await api('/admin/api/users/' + id + '/ban', { method: 'POST', body: JSON.stringify({ banned: banned }) });
-  await ensureUsers();
-  loadUsers();
+  await ensureUsers(); loadUsers();
+}
+
+async function loadComments() {
+  const data = await api('/admin/api/comments');
+  const rows = (data.comments || []).map(function(c) {
+    const actions = '<button class="btn warn" onclick="hideCommentAdmin(' + c.id + ')">隐藏</button> <button class="btn danger" onclick="deleteCommentAdmin(' + c.id + ')">真删除</button>';
+    return [esc(c.created_at), esc(c.work_title || c.work_id), esc(c.display_name || c.username), esc(c.status), '<div class="log-detail">' + esc(c.content) + '</div><div class="small">' + esc(c.hidden_reason || '') + '</div>', actions];
+  });
+  document.getElementById('content').innerHTML = rows.length ? renderTable(['时间', '作品', '评论者', '状态', '内容', '操作'], rows, true) : '<div class="empty">暂无评论</div>';
+}
+async function hideCommentAdmin(id) {
+  const reason = prompt('请输入隐藏评论理由');
+  if (!reason || !reason.trim()) return;
+  await api('/admin/api/comments/' + id + '/hide', { method: 'POST', body: JSON.stringify({ reason: reason.trim() }) });
+  await loadContent();
+}
+async function deleteCommentAdmin(id) {
+  if (!confirm('确定真删除该评论？操作日志会保留。')) return;
+  await api('/admin/api/comments/' + id, { method: 'DELETE' });
+  await loadContent();
+}
+
+async function loadDownloads() {
+  const data = await api('/admin/api/downloads');
+  renderRows('downloads', data.downloads || [], ['created_at', 'display_name', 'work_title', 'work_type', 'ip']);
+}
+async function loadFavorites() {
+  const data = await api('/admin/api/favorites');
+  renderRows('favorites', data.favorites || [], ['created_at', 'display_name', 'work_title', 'work_type']);
+}
+async function loadLikes() {
+  const data = await api('/admin/api/likes');
+  renderRows('likes', data.likes || [], ['created_at', 'display_name', 'work_title', 'work_type']);
+}
+function renderRows(_name, rows, keys) {
+  if (!rows.length) return empty('暂无记录');
+  document.getElementById('content').innerHTML = renderTable(keys, rows.map(function(row) { return keys.map(function(k) { return esc(row[k]); }); }), true);
 }
 
 function applyLogFilters() {
@@ -296,35 +342,20 @@ function applyLogFilters() {
   logFilters.action = document.getElementById('logAction').value.trim();
   loadLogs();
 }
-
 async function loadLogs() {
   const params = logQueryParams();
-  params.set('page_size', '120');
+  params.set('page_size', '160');
   const data = await api('/admin/api/logs?' + params.toString());
-  if (!data.logs || !data.logs.length) {
-    document.getElementById('content').innerHTML = '<div class="empty">当前筛选条件下没有操作记录</div>';
-    return;
-  }
-  const rows = data.logs.map(function(log) {
-    const actor = log.actor_display_name || log.actor_username || (log.user_id == null ? 'anonymous' : 'user#' + log.user_id);
-    const target = log.target_display_name || log.target_username || (log.target_user_id == null ? '' : 'user#' + log.target_user_id);
-    return '<tr><td>' + esc(log.created_at) + '<div class="small">日期分组：' + esc(log.log_date) + '</div></td>' +
-      '<td>' + esc(actor) + '</td><td>' + esc(CATEGORY_LABELS[log.category] || log.category) + '</td>' +
-      '<td>' + esc(log.action) + '<div class="small">' + esc(log.entity_type || '') + ' ' + esc(log.entity_id || '') + '</div></td>' +
-      '<td>' + esc(target) + '</td><td>' + (log.success ? '成功' : '失败') + '</td>' +
-      '<td><div class="log-detail">' + esc(formatDetail(log.detail)) + '</div></td></tr>';
-  }).join('');
-  document.getElementById('content').innerHTML = '<table class="table"><thead><tr><th>精确时间戳</th><th>操作者</th><th>分类</th><th>操作</th><th>目标用户</th><th>结果</th><th>详情</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  const logs = data.logs || [];
+  if (!logs.length) return empty('当前筛选条件下没有操作记录');
+  const rows = logs.map(function(log) {
+    const actor = log.actor_display_name || log.actor_username || (log.user_id == null ? '未识别用户' : '用户#' + log.user_id);
+    const target = log.target_display_name || log.target_username || (log.target_user_id == null ? '' : '用户#' + log.target_user_id);
+    return [esc(log.created_at) + '<div class="small">日期分组：' + esc(log.log_date) + '</div>', esc(actor), esc(CATEGORY_LABELS[log.category] || log.category), esc(log.action_label || log.action), esc(target), log.success ? '成功' : '失败', '<div class="log-detail">' + esc(formatDetail(log.detail)) + '</div>'];
+  });
+  document.getElementById('content').innerHTML = renderTable(['精确时间戳', '操作者', '分类', '操作', '目标用户', '结果', '详情'], rows, true);
 }
-
-function formatDetail(detail) {
-  try {
-    return JSON.stringify(JSON.parse(detail || '{}'), null, 2);
-  } catch (e) {
-    return detail || '';
-  }
-}
-
+function formatDetail(detail) { try { return JSON.stringify(JSON.parse(detail || '{}'), null, 2); } catch (e) { return detail || ''; } }
 function logQueryParams() {
   const params = new URLSearchParams();
   if (logFilters.date) params.set('date', logFilters.date);
@@ -333,7 +364,6 @@ function logQueryParams() {
   if (logFilters.action) params.set('action', logFilters.action);
   return params;
 }
-
 function downloadLogs(format) {
   applyLogFilters();
   const params = logQueryParams();
@@ -341,22 +371,25 @@ function downloadLogs(format) {
   window.location.href = '/admin/api/logs/download?' + params.toString();
 }
 
-async function loadSystemStats() {
-  const data = await api('/admin/api/stats');
-  const rows = [
-    ['总用户', data.totalUsers],
-    ['已通过作品', data.totalWorks],
-    ['待审核作品', data.pendingWorks],
-    ['今日上传', data.todayUploads]
-  ];
-  Object.keys(TYPE_CONFIG).forEach(function(type) {
-    rows.push(['待审 · ' + TYPE_CONFIG[type].label, (data.pendingByType || {})[type] || 0]);
-    rows.push(['已通过 · ' + TYPE_CONFIG[type].label, (data.approvedByType || {})[type] || 0]);
+async function traceUser(id) {
+  currentTab = 'logs'; renderTabs();
+  logFilters.user_id = String(id); logFilters.date = ''; logFilters.category = ''; logFilters.action = '';
+  renderToolbar(); await loadLogs();
+}
+async function traceWork(id) {
+  const data = await api('/admin/api/trace/works/' + id);
+  const rows = (data.logs || []).map(function(log) {
+    return [esc(log.created_at), esc(log.actor_display_name || log.actor_username), esc(log.action_label || log.action), '<div class="log-detail">' + esc(formatDetail(log.detail)) + '</div>'];
   });
-  document.getElementById('content').innerHTML = '<table class="table"><thead><tr><th>项目</th><th>数量</th></tr></thead><tbody>' +
-    rows.map(function(row) { return '<tr><td>' + esc(row[0]) + '</td><td>' + esc(row[1]) + '</td></tr>'; }).join('') +
+  document.getElementById('content').innerHTML = rows.length ? renderTable(['时间', '操作者', '操作', '详情'], rows, true) : '<div class="empty">暂无追溯记录</div>';
+}
+
+function renderTable(headers, rows, raw) {
+  return '<table class="table"><thead><tr>' + headers.map(function(h) { return '<th>' + esc(h) + '</th>'; }).join('') + '</tr></thead><tbody>' +
+    rows.map(function(row) { return '<tr>' + row.map(function(cell) { return '<td>' + (raw ? cell : esc(cell)) + '</td>'; }).join('') + '</tr>'; }).join('') +
     '</tbody></table>';
 }
+function empty(text) { document.getElementById('content').innerHTML = '<div class="empty">' + esc(text) + '</div>'; }
 
 renderTabs();
 renderToolbar();
