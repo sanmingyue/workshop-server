@@ -1107,16 +1107,46 @@ export function incrementDownloadCount(workId: number): void {
   getDb().prepare('UPDATE works SET download_count = download_count + 1 WHERE id = ?').run(workId);
 }
 
+/**
+ * 检查用户是否已经下载过该作品（用于去重计数）
+ */
+export function hasUserDownloaded(userId: number, workId: number): boolean {
+  const row = getDb().prepare('SELECT id FROM downloads WHERE user_id = ? AND work_id = ? LIMIT 1').get(userId, workId);
+  return !!row;
+}
+
+/**
+ * 记录下载 —— 同一用户同一作品只保留一条记录（upsert 语义）
+ * 重复下载时更新时间戳、版本、指纹等字段，不新增记录
+ */
 export function recordDownload(userId: number, workId: number, versionId: number | null, ip: string, userAgent: string): DbDownload {
   const tx = getDb().transaction(() => {
     const createdAt = currentIso();
-    const inserted = getDb().prepare(`
-      INSERT INTO downloads (
-        user_id, work_id, work_version_id, fingerprint_token, fingerprint_payload,
-        fingerprint_version, file_token, ip, user_agent, created_at
-      ) VALUES (?, ?, ?, '', '', 'v1', '', ?, ?, ?)
-    `).run(userId, workId, versionId, ip, userAgent, createdAt);
-    const downloadId = inserted.lastInsertRowid as number;
+
+    // 检查是否已有该用户+作品的下载记录
+    const existing = getDb().prepare('SELECT id FROM downloads WHERE user_id = ? AND work_id = ? LIMIT 1').get(userId, workId) as { id: number } | undefined;
+
+    let downloadId: number;
+    if (existing) {
+      // 已有记录：更新时间、版本、IP 等
+      downloadId = existing.id;
+      getDb().prepare(`
+        UPDATE downloads
+        SET work_version_id = ?, ip = ?, user_agent = ?, created_at = ?
+        WHERE id = ?
+      `).run(versionId, ip, userAgent, createdAt, downloadId);
+    } else {
+      // 首次下载：插入新记录
+      const inserted = getDb().prepare(`
+        INSERT INTO downloads (
+          user_id, work_id, work_version_id, fingerprint_token, fingerprint_payload,
+          fingerprint_version, file_token, ip, user_agent, created_at
+        ) VALUES (?, ?, ?, '', '', 'v1', '', ?, ?, ?)
+      `).run(userId, workId, versionId, ip, userAgent, createdAt);
+      downloadId = inserted.lastInsertRowid as number;
+    }
+
+    // 生成/更新指纹
     const nonce = createFingerprintNonce();
     const fingerprintInput = { downloadId, userId, workId, versionId, createdAt, nonce };
     const fingerprintToken = createFingerprintToken(fingerprintInput);
@@ -1127,6 +1157,7 @@ export function recordDownload(userId: number, workId: number, versionId: number
       SET fingerprint_token = ?, fingerprint_payload = ?, fingerprint_version = 'v1', file_token = ?
       WHERE id = ?
     `).run(fingerprintToken, payload, fileToken, downloadId);
+
     const meta = getDb().prepare(`
       SELECT w.title as work_title, w.type as work_type, w.user_id as author_user_id,
              u.discord_username as downloader_username, u.discord_display_name as downloader_display_name, u.discord_id as downloader_discord_id,

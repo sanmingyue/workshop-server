@@ -19,6 +19,7 @@ import {
   getUserLikedWorkIds,
   getWorkById,
   getWorkComments,
+  hasUserDownloaded,
   hideComment,
   incrementDownloadCount,
   recordDownload,
@@ -51,14 +52,21 @@ const upload = multer({
   storage,
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
-    const allowed = ['.png', '.jpg', '.jpeg', '.gif', '.webp'];
+    // cover 字段只允许图片；card_file 字段允许图片和 JSON
     const ext = path.extname(file.originalname).toLowerCase();
-    if (allowed.includes(ext)) cb(null, true);
-    else cb(new Error('只支持 PNG/JPG/GIF/WebP 格式的图片'));
+    if (file.fieldname === 'card_file') {
+      const allowed = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.json'];
+      if (allowed.includes(ext)) cb(null, true);
+      else cb(new Error('资源文件只支持 PNG/JPG/GIF/WebP/JSON 格式'));
+    } else {
+      const allowed = ['.png', '.jpg', '.jpeg', '.gif', '.webp'];
+      if (allowed.includes(ext)) cb(null, true);
+      else cb(new Error('只支持 PNG/JPG/GIF/WebP 格式的图片'));
+    }
   },
 });
 
-const VALID_TYPES = ['regex', 'persona', 'card_addon', 'worldbook', 'collection'];
+const VALID_TYPES = ['regex', 'persona', 'character', 'card_addon', 'worldbook', 'collection'];
 
 function requestIp(req: Request): string {
   const forwarded = req.headers['x-forwarded-for'];
@@ -347,19 +355,24 @@ router.post('/', requireAuth, upload.fields([
   { name: 'cover', maxCount: 1 },
   { name: 'card_file', maxCount: 1 },
 ]), (req: Request, res: Response) => {
-  const { title, description, type, content, tags, card_link, file_type, char_name, child_ids } = req.body;
+  const { title, description, type, content, tags, card_link, file_type, char_name, child_ids, addon_subtype } = req.body;
   const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
 
   if (!title || !title.trim()) { res.status(400).json({ error: '标题不能为空' }); return; }
   if (!type || !VALID_TYPES.includes(type)) { res.status(400).json({ error: `无效的类型，支持: ${VALID_TYPES.join(', ')}` }); return; }
   const finalCharName = (char_name || '').trim();
   if ((type === 'persona' || type === 'card_addon') && !finalCharName) { res.status(400).json({ error: '人设/OC与角色卡二创必须填写角色名' }); return; }
+  if (type === 'character' && (!card_link || !card_link.trim())) { res.status(400).json({ error: '角色卡类型必须填写角色卡链接' }); return; }
   if (type === 'card_addon' && (!card_link || !card_link.trim())) { res.status(400).json({ error: '角色卡配套类型必须填写角色卡链接' }); return; }
+
+  const cardFile = files?.card_file?.[0];
 
   let finalContent = content || '';
   let finalFileType = file_type || 'json';
   let collectionChildIds: number[] = [];
+
   if (type === 'collection') {
+    // 合集：不需要内容或资源文件
     const coverFile = files?.cover?.[0];
     if (!coverFile) { res.status(400).json({ error: '作者合集必须上传封面图' }); return; }
     collectionChildIds = parseIdArray(child_ids);
@@ -371,7 +384,65 @@ router.post('/', requireAuth, upload.fields([
     }
     finalContent = '';
     finalFileType = 'json';
+  } else if (type === 'character') {
+    // 角色卡：必须通过 card_file 上传
+    if (!cardFile) { res.status(400).json({ error: '角色卡类型必须上传角色卡文件' }); return; }
+    const ext = path.extname(cardFile.originalname).toLowerCase();
+    finalFileType = ext === '.png' ? 'png' : 'json';
+    finalContent = `__card_file__:${cardFile.filename}`;
+  } else if (type === 'regex' || type === 'worldbook') {
+    // 正则/世界书：优先走 card_file 文件上传，回退到 content 文本
+    if (cardFile) {
+      // 读取 JSON 文件内容存入 content
+      const fileContent = fs.readFileSync(cardFile.path, 'utf8');
+      if (Buffer.byteLength(fileContent, 'utf8') > config.maxContentSize) {
+        // 清理上传的文件
+        try { fs.unlinkSync(cardFile.path); } catch { /* ignore */ }
+        res.status(400).json({ error: '文件内容过大，最大 1MB' });
+        return;
+      }
+      finalContent = fileContent;
+      finalFileType = 'json';
+      // 删除临时文件（内容已读入 content）
+      try { fs.unlinkSync(cardFile.path); } catch { /* ignore */ }
+    } else if (finalContent && finalContent.trim()) {
+      // 兼容旧方式：通过 content 字段传文本
+      if (Buffer.byteLength(finalContent, 'utf8') > config.maxContentSize) {
+        res.status(400).json({ error: '内容过大，最大 1MB' });
+        return;
+      }
+    } else {
+      res.status(400).json({ error: '请上传资源文件或填写内容' });
+      return;
+    }
+  } else if (type === 'card_addon') {
+    // 角色卡二创：根据 addon_subtype 决定
+    const subtype = (addon_subtype || '').trim();
+    if (subtype && subtype !== 'persona' && cardFile) {
+      // 非 persona 子类型：读取文件
+      const fileContent = fs.readFileSync(cardFile.path, 'utf8');
+      if (Buffer.byteLength(fileContent, 'utf8') > config.maxContentSize) {
+        try { fs.unlinkSync(cardFile.path); } catch { /* ignore */ }
+        res.status(400).json({ error: '文件内容过大，最大 1MB' });
+        return;
+      }
+      finalContent = fileContent;
+      try { fs.unlinkSync(cardFile.path); } catch { /* ignore */ }
+    }
+    // 编码 addon_subtype 到 file_type
+    if (subtype) {
+      finalFileType = `json:${subtype}`;
+    }
+    if (!finalContent || !finalContent.trim()) {
+      res.status(400).json({ error: '内容不能为空' });
+      return;
+    }
+    if (Buffer.byteLength(finalContent, 'utf8') > config.maxContentSize) {
+      res.status(400).json({ error: '内容过大，最大 1MB' });
+      return;
+    }
   } else {
+    // persona 等其他类型：纯文本内容
     if (!finalContent || !finalContent.trim()) { res.status(400).json({ error: '内容不能为空' }); return; }
     if (Buffer.byteLength(finalContent, 'utf8') > config.maxContentSize) { res.status(400).json({ error: '内容过大，最大 1MB' }); return; }
   }
@@ -505,7 +576,11 @@ router.get('/:id/download', requireAuth, (req: Request, res: Response) => {
   if (!work || !canViewWork(work, req.user)) { res.status(404).json({ error: '作品不存在' }); return; }
   if (work.status !== 'approved' && work.user_id !== req.user!.id) { res.status(404).json({ error: '作品不存在' }); return; }
 
-  incrementDownloadCount(work.id);
+  // 只在用户首次下载该作品时递增 download_count
+  const isFirstDownload = !hasUserDownloaded(req.user!.id, work.id);
+  if (isFirstDownload) {
+    incrementDownloadCount(work.id);
+  }
   const download = recordDownload(req.user!.id, work.id, work.current_version_id || null, requestIp(req), String(req.headers['user-agent'] || ''));
   recordAuditLog({
     req,
