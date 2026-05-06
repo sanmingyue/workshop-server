@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import { config } from './config';
+import { createDownloadFileToken, createFingerprintNonce, createFingerprintToken } from './fingerprint';
 
 let db: Database.Database;
 
@@ -130,12 +131,38 @@ export function initDatabase(): Database.Database {
       user_id INTEGER NOT NULL,
       work_id INTEGER NOT NULL,
       work_version_id INTEGER,
+      fingerprint_token TEXT DEFAULT '',
+      fingerprint_payload TEXT DEFAULT '',
+      fingerprint_version TEXT DEFAULT 'v1',
+      file_token TEXT DEFAULT '',
       ip TEXT DEFAULT '',
       user_agent TEXT DEFAULT '',
       created_at TEXT NOT NULL,
       FOREIGN KEY (user_id) REFERENCES users(id),
       FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE,
       FOREIGN KEY (work_version_id) REFERENCES work_versions(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS download_fingerprints (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      fingerprint_token TEXT UNIQUE NOT NULL,
+      fingerprint_payload TEXT DEFAULT '',
+      fingerprint_version TEXT DEFAULT 'v1',
+      download_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      downloader_username TEXT DEFAULT '',
+      downloader_display_name TEXT DEFAULT '',
+      downloader_discord_id TEXT DEFAULT '',
+      work_id INTEGER NOT NULL,
+      work_version_id INTEGER,
+      work_title TEXT DEFAULT '',
+      work_type TEXT DEFAULT '',
+      author_user_id INTEGER,
+      author_username TEXT DEFAULT '',
+      author_display_name TEXT DEFAULT '',
+      ip TEXT DEFAULT '',
+      user_agent TEXT DEFAULT '',
+      created_at TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS comments (
@@ -213,6 +240,10 @@ export function initDatabase(): Database.Database {
   migrateColumn('works', 'comment_count', 'INTEGER DEFAULT 0');
   migrateColumn('user_passwords', 'password_plain', "TEXT DEFAULT ''");
   migrateColumn('user_passwords', 'password_updated_at', "TEXT DEFAULT ''");
+  migrateColumn('downloads', 'fingerprint_token', "TEXT DEFAULT ''");
+  migrateColumn('downloads', 'fingerprint_payload', "TEXT DEFAULT ''");
+  migrateColumn('downloads', 'fingerprint_version', "TEXT DEFAULT 'v1'");
+  migrateColumn('downloads', 'file_token', "TEXT DEFAULT ''");
   migrateColumn('audit_logs', 'action_label', "TEXT DEFAULT ''");
 
   db.exec(`
@@ -220,23 +251,38 @@ export function initDatabase(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_works_type ON works(type);
     CREATE INDEX IF NOT EXISTS idx_works_user ON works(user_id);
     CREATE INDEX IF NOT EXISTS idx_works_visibility ON works(visibility);
+    CREATE INDEX IF NOT EXISTS idx_works_status_visibility_created ON works(status, visibility, created_at);
+    CREATE INDEX IF NOT EXISTS idx_works_user_created ON works(user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_work_versions_work ON work_versions(work_id);
     CREATE INDEX IF NOT EXISTS idx_work_versions_status ON work_versions(status);
     CREATE INDEX IF NOT EXISTS idx_likes_work ON likes(work_id);
     CREATE INDEX IF NOT EXISTS idx_likes_user ON likes(user_id);
+    CREATE INDEX IF NOT EXISTS idx_likes_user_created ON likes(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_likes_work_created ON likes(work_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_favorites_work ON favorites(work_id);
     CREATE INDEX IF NOT EXISTS idx_favorites_user ON favorites(user_id);
+    CREATE INDEX IF NOT EXISTS idx_favorites_user_created ON favorites(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_favorites_work_created ON favorites(work_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_downloads_work ON downloads(work_id);
     CREATE INDEX IF NOT EXISTS idx_downloads_user ON downloads(user_id);
+    CREATE INDEX IF NOT EXISTS idx_downloads_fingerprint ON downloads(fingerprint_token);
+    CREATE INDEX IF NOT EXISTS idx_downloads_user_created ON downloads(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_downloads_work_created ON downloads(work_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_download_fingerprints_token ON download_fingerprints(fingerprint_token);
+    CREATE INDEX IF NOT EXISTS idx_download_fingerprints_user_created ON download_fingerprints(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_download_fingerprints_work_created ON download_fingerprints(work_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_comments_work ON comments(work_id);
     CREATE INDEX IF NOT EXISTS idx_comments_user ON comments(user_id);
     CREATE INDEX IF NOT EXISTS idx_comments_status ON comments(status);
+    CREATE INDEX IF NOT EXISTS idx_comments_work_status_created ON comments(work_id, status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_comments_user_created ON comments(user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
     CREATE INDEX IF NOT EXISTS idx_audit_logs_date_user ON audit_logs(log_date, user_id);
     CREATE INDEX IF NOT EXISTS idx_audit_logs_target_user ON audit_logs(target_user_id);
     CREATE INDEX IF NOT EXISTS idx_audit_logs_category ON audit_logs(category);
     CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
     CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at);
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_entity_created ON audit_logs(entity_type, entity_id, created_at);
   `);
 
   backfillWorkVersions();
@@ -346,6 +392,33 @@ export function isAdmin(user: DbUser): boolean {
 
 export function getAllUsers(): DbUser[] {
   return getDb().prepare('SELECT * FROM users ORDER BY created_at DESC').all() as DbUser[];
+}
+
+export function searchUsersAdmin(options: AdminUserSearchOptions): PageResult<DbUser> {
+  const where: string[] = [];
+  const params: unknown[] = [];
+  const q = options.q?.trim();
+  if (q) {
+    where.push(`(
+      discord_username LIKE ?
+      OR discord_display_name LIKE ?
+      OR discord_id LIKE ?
+      OR CAST(id AS TEXT) = ?
+    )`);
+    params.push(`%${q}%`, `%${q}%`, `%${q}%`, q);
+  }
+
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const { page, pageSize, offset } = pageParams(options.page, options.pageSize, 200);
+  const total = (getDb().prepare(`SELECT COUNT(*) as c FROM users ${whereSql}`).get(...params) as { c: number }).c;
+  const users = getDb().prepare(`
+    SELECT *
+    FROM users
+    ${whereSql}
+    ORDER BY created_at DESC, id DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, pageSize, offset) as DbUser[];
+  return pageResult(users, total, page, pageSize);
 }
 
 export function banUser(userId: number, banned: boolean): void {
@@ -466,6 +539,71 @@ export interface DbComment {
   avatar?: string;
   work_title?: string;
   work_author_id?: number;
+}
+
+export interface DbDownload {
+  id: number;
+  user_id: number;
+  work_id: number;
+  work_version_id: number | null;
+  fingerprint_token: string;
+  fingerprint_payload: string;
+  fingerprint_version: string;
+  file_token: string;
+  ip: string;
+  user_agent: string;
+  created_at: string;
+}
+
+export interface PageResult<T> {
+  items: T[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+export interface AdminWorkSearchOptions {
+  status?: string;
+  type?: string;
+  visibility?: string;
+  q?: string;
+  userId?: number;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface AdminUserSearchOptions {
+  q?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface AdminCommentSearchOptions {
+  status?: string;
+  workId?: number;
+  userId?: number;
+  q?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface AdminActivitySearchOptions {
+  userId?: number;
+  workId?: number;
+  q?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+function pageParams(page?: number, pageSize?: number, maxPageSize: number = 200): { page: number; pageSize: number; offset: number } {
+  const finalPage = Math.max(1, page || 1);
+  const finalPageSize = Math.min(maxPageSize, Math.max(1, pageSize || 80));
+  return { page: finalPage, pageSize: finalPageSize, offset: (finalPage - 1) * finalPageSize };
+}
+
+function pageResult<T>(items: T[], total: number, page: number, pageSize: number): PageResult<T> {
+  return { items, total, page, page_size: pageSize, total_pages: Math.ceil(total / pageSize) };
 }
 
 function selectWorkWithAuthor(where: string, params: unknown[], orderBy: string): WorkWithAuthor[] {
@@ -640,6 +778,50 @@ export function getAllWorksAdmin(status?: string, type?: string, visibility?: st
   return selectWorkWithAuthor(whereSql, params, 'ORDER BY w.created_at DESC');
 }
 
+export function searchWorksAdmin(options: AdminWorkSearchOptions): PageResult<WorkWithAuthor> {
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (options.status) {
+    where.push('w.status = ?');
+    params.push(options.status);
+  }
+  if (options.type) {
+    where.push('w.type = ?');
+    params.push(options.type);
+  }
+  if (options.visibility) {
+    where.push('w.visibility = ?');
+    params.push(options.visibility);
+  }
+  if (options.userId) {
+    where.push('w.user_id = ?');
+    params.push(options.userId);
+  }
+  const q = options.q?.trim();
+  if (q) {
+    where.push(`(
+      w.title LIKE ?
+      OR w.description LIKE ?
+      OR w.tags LIKE ?
+      OR u.discord_username LIKE ?
+      OR u.discord_display_name LIKE ?
+      OR CAST(w.id AS TEXT) = ?
+    )`);
+    params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, q);
+  }
+
+  const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+  const { page, pageSize, offset } = pageParams(options.page, options.pageSize, 120);
+  const total = (getDb().prepare(`
+    SELECT COUNT(*) as c
+    FROM works w
+    JOIN users u ON w.user_id = u.id
+    ${whereSql}
+  `).get(...params) as { c: number }).c;
+  const works = selectWorkWithAuthor(whereSql, [...params, pageSize, offset], 'ORDER BY w.created_at DESC, w.id DESC LIMIT ? OFFSET ?');
+  return pageResult(works, total, page, pageSize);
+}
+
 export function getWorkVersion(versionId: number): VersionWithWork | undefined {
   return getDb().prepare(`
     SELECT v.*, w.title as work_title, w.visibility as work_visibility,
@@ -800,9 +982,124 @@ export function incrementDownloadCount(workId: number): void {
   getDb().prepare('UPDATE works SET download_count = download_count + 1 WHERE id = ?').run(workId);
 }
 
-export function recordDownload(userId: number, workId: number, versionId: number | null, ip: string, userAgent: string): void {
-  getDb().prepare('INSERT INTO downloads (user_id, work_id, work_version_id, ip, user_agent, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(userId, workId, versionId, ip, userAgent, currentIso());
+export function recordDownload(userId: number, workId: number, versionId: number | null, ip: string, userAgent: string): DbDownload {
+  const tx = getDb().transaction(() => {
+    const createdAt = currentIso();
+    const inserted = getDb().prepare(`
+      INSERT INTO downloads (
+        user_id, work_id, work_version_id, fingerprint_token, fingerprint_payload,
+        fingerprint_version, file_token, ip, user_agent, created_at
+      ) VALUES (?, ?, ?, '', '', 'v1', '', ?, ?, ?)
+    `).run(userId, workId, versionId, ip, userAgent, createdAt);
+    const downloadId = inserted.lastInsertRowid as number;
+    const nonce = createFingerprintNonce();
+    const fingerprintInput = { downloadId, userId, workId, versionId, createdAt, nonce };
+    const fingerprintToken = createFingerprintToken(fingerprintInput);
+    const fileToken = createDownloadFileToken(downloadId, fingerprintToken);
+    const payload = JSON.stringify({ ...fingerprintInput, fingerprintToken });
+    getDb().prepare(`
+      UPDATE downloads
+      SET fingerprint_token = ?, fingerprint_payload = ?, fingerprint_version = 'v1', file_token = ?
+      WHERE id = ?
+    `).run(fingerprintToken, payload, fileToken, downloadId);
+    const meta = getDb().prepare(`
+      SELECT w.title as work_title, w.type as work_type, w.user_id as author_user_id,
+             u.discord_username as downloader_username, u.discord_display_name as downloader_display_name, u.discord_id as downloader_discord_id,
+             author.discord_username as author_username, author.discord_display_name as author_display_name
+      FROM works w
+      JOIN users u ON u.id = ?
+      JOIN users author ON author.id = w.user_id
+      WHERE w.id = ?
+    `).get(userId, workId) as any;
+    getDb().prepare(`
+      INSERT OR REPLACE INTO download_fingerprints (
+        fingerprint_token, fingerprint_payload, fingerprint_version, download_id, user_id,
+        downloader_username, downloader_display_name, downloader_discord_id,
+        work_id, work_version_id, work_title, work_type, author_user_id, author_username,
+        author_display_name, ip, user_agent, created_at
+      ) VALUES (?, ?, 'v1', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      fingerprintToken,
+      payload,
+      downloadId,
+      userId,
+      meta?.downloader_username || '',
+      meta?.downloader_display_name || '',
+      meta?.downloader_discord_id || '',
+      workId,
+      versionId,
+      meta?.work_title || '',
+      meta?.work_type || '',
+      meta?.author_user_id || null,
+      meta?.author_username || '',
+      meta?.author_display_name || '',
+      ip,
+      userAgent,
+      createdAt,
+    );
+    return getDownloadById(downloadId)!;
+  });
+  return tx();
+}
+
+export function getDownloadById(downloadId: number): DbDownload | undefined {
+  return getDb().prepare('SELECT * FROM downloads WHERE id = ?').get(downloadId) as DbDownload | undefined;
+}
+
+export function getDownloadFileRecord(downloadId: number, fileToken: string): any | undefined {
+  return getDb().prepare(`
+    SELECT d.*, w.title as work_title, w.type as work_type, w.file_type, w.content,
+           author.discord_username as author_username, author.discord_display_name as author_display_name
+    FROM downloads d
+    JOIN works w ON w.id = d.work_id
+    JOIN users author ON author.id = w.user_id
+    WHERE d.id = ? AND d.file_token = ?
+  `).get(downloadId, fileToken);
+}
+
+export function findDownloadByFingerprint(fingerprintToken: string): any | undefined {
+  const archived = getDb().prepare(`
+    SELECT
+      fp.download_id as id,
+      fp.download_id,
+      fp.user_id,
+      fp.work_id,
+      fp.work_version_id,
+      fp.fingerprint_token,
+      fp.fingerprint_payload,
+      fp.fingerprint_version,
+      fp.ip,
+      fp.user_agent,
+      fp.created_at,
+      fp.work_title,
+      fp.work_type,
+      COALESCE(w.status, '') as work_status,
+      COALESCE(w.visibility, '') as work_visibility,
+      fp.downloader_username as username,
+      fp.downloader_display_name as display_name,
+      fp.downloader_discord_id as discord_id,
+      fp.author_username,
+      fp.author_display_name,
+      v.version_no as version_no
+    FROM download_fingerprints fp
+    LEFT JOIN works w ON w.id = fp.work_id
+    LEFT JOIN work_versions v ON v.id = fp.work_version_id
+    WHERE fp.fingerprint_token = ?
+  `).get(fingerprintToken);
+  if (archived) return archived;
+
+  return getDb().prepare(`
+    SELECT d.*, w.title as work_title, w.type as work_type, w.status as work_status, w.visibility as work_visibility,
+           u.discord_username as username, u.discord_display_name as display_name, u.discord_id as discord_id,
+           author.discord_username as author_username, author.discord_display_name as author_display_name,
+           v.version_no as version_no
+    FROM downloads d
+    JOIN works w ON w.id = d.work_id
+    JOIN users u ON u.id = d.user_id
+    JOIN users author ON author.id = w.user_id
+    LEFT JOIN work_versions v ON v.id = d.work_version_id
+    WHERE d.fingerprint_token = ?
+  `).get(fingerprintToken);
 }
 
 export function getDownloadsAdmin(limit: number = 300): any[] {
@@ -817,6 +1114,55 @@ export function getDownloadsAdmin(limit: number = 300): any[] {
     ORDER BY d.created_at DESC
     LIMIT ?
   `).all(limit);
+}
+
+export function searchDownloadsAdmin(options: AdminActivitySearchOptions): PageResult<any> {
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (options.userId) {
+    where.push('d.user_id = ?');
+    params.push(options.userId);
+  }
+  if (options.workId) {
+    where.push('d.work_id = ?');
+    params.push(options.workId);
+  }
+  const q = options.q?.trim();
+  if (q) {
+    where.push(`(
+      d.fingerprint_token LIKE ?
+      OR w.title LIKE ?
+      OR u.discord_username LIKE ?
+      OR u.discord_display_name LIKE ?
+      OR author.discord_username LIKE ?
+      OR author.discord_display_name LIKE ?
+      OR CAST(d.id AS TEXT) = ?
+    )`);
+    params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, q);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const { page, pageSize, offset } = pageParams(options.page, options.pageSize, 200);
+  const total = (getDb().prepare(`
+    SELECT COUNT(*) as c
+    FROM downloads d
+    JOIN works w ON w.id = d.work_id
+    JOIN users u ON u.id = d.user_id
+    JOIN users author ON author.id = w.user_id
+    ${whereSql}
+  `).get(...params) as { c: number }).c;
+  const downloads = getDb().prepare(`
+    SELECT d.*, w.title as work_title, w.type as work_type,
+           u.discord_username as username, u.discord_display_name as display_name,
+           author.discord_username as author_username, author.discord_display_name as author_display_name
+    FROM downloads d
+    JOIN works w ON w.id = d.work_id
+    JOIN users u ON u.id = d.user_id
+    JOIN users author ON author.id = w.user_id
+    ${whereSql}
+    ORDER BY d.created_at DESC, d.id DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, pageSize, offset) as any[];
+  return pageResult(downloads, total, page, pageSize);
 }
 
 export function getUserDownloads(userId: number): any[] {
@@ -860,6 +1206,44 @@ export function getLikesAdmin(limit: number = 300): any[] {
   `).all(limit);
 }
 
+export function searchLikesAdmin(options: AdminActivitySearchOptions): PageResult<any> {
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (options.userId) {
+    where.push('l.user_id = ?');
+    params.push(options.userId);
+  }
+  if (options.workId) {
+    where.push('l.work_id = ?');
+    params.push(options.workId);
+  }
+  const q = options.q?.trim();
+  if (q) {
+    where.push('(w.title LIKE ? OR u.discord_username LIKE ? OR u.discord_display_name LIKE ? OR CAST(l.id AS TEXT) = ?)');
+    params.push(`%${q}%`, `%${q}%`, `%${q}%`, q);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const { page, pageSize, offset } = pageParams(options.page, options.pageSize, 200);
+  const total = (getDb().prepare(`
+    SELECT COUNT(*) as c
+    FROM likes l
+    JOIN works w ON w.id = l.work_id
+    JOIN users u ON u.id = l.user_id
+    ${whereSql}
+  `).get(...params) as { c: number }).c;
+  const likes = getDb().prepare(`
+    SELECT l.*, w.title as work_title, w.type as work_type,
+           u.discord_username as username, u.discord_display_name as display_name
+    FROM likes l
+    JOIN works w ON w.id = l.work_id
+    JOIN users u ON u.id = l.user_id
+    ${whereSql}
+    ORDER BY l.created_at DESC, l.id DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, pageSize, offset) as any[];
+  return pageResult(likes, total, page, pageSize);
+}
+
 export function toggleFavorite(userId: number, workId: number): boolean {
   const existing = getDb().prepare('SELECT id FROM favorites WHERE user_id = ? AND work_id = ?').get(userId, workId);
   if (existing) {
@@ -887,6 +1271,44 @@ export function getFavoritesAdmin(limit: number = 300): any[] {
     ORDER BY f.created_at DESC
     LIMIT ?
   `).all(limit);
+}
+
+export function searchFavoritesAdmin(options: AdminActivitySearchOptions): PageResult<any> {
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (options.userId) {
+    where.push('f.user_id = ?');
+    params.push(options.userId);
+  }
+  if (options.workId) {
+    where.push('f.work_id = ?');
+    params.push(options.workId);
+  }
+  const q = options.q?.trim();
+  if (q) {
+    where.push('(w.title LIKE ? OR u.discord_username LIKE ? OR u.discord_display_name LIKE ? OR CAST(f.id AS TEXT) = ?)');
+    params.push(`%${q}%`, `%${q}%`, `%${q}%`, q);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const { page, pageSize, offset } = pageParams(options.page, options.pageSize, 200);
+  const total = (getDb().prepare(`
+    SELECT COUNT(*) as c
+    FROM favorites f
+    JOIN works w ON w.id = f.work_id
+    JOIN users u ON u.id = f.user_id
+    ${whereSql}
+  `).get(...params) as { c: number }).c;
+  const favorites = getDb().prepare(`
+    SELECT f.*, w.title as work_title, w.type as work_type,
+           u.discord_username as username, u.discord_display_name as display_name
+    FROM favorites f
+    JOIN works w ON w.id = f.work_id
+    JOIN users u ON u.id = f.user_id
+    ${whereSql}
+    ORDER BY f.created_at DESC, f.id DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, pageSize, offset) as any[];
+  return pageResult(favorites, total, page, pageSize);
 }
 
 export function getUserFavorites(userId: number): any[] {
@@ -949,6 +1371,55 @@ export function getAllCommentsAdmin(status?: string): DbComment[] {
     ${where}
     ORDER BY c.created_at DESC
   `).all(...params) as DbComment[];
+}
+
+export function searchCommentsAdmin(options: AdminCommentSearchOptions): PageResult<DbComment> {
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (options.status) {
+    where.push('c.status = ?');
+    params.push(options.status);
+  }
+  if (options.workId) {
+    where.push('c.work_id = ?');
+    params.push(options.workId);
+  }
+  if (options.userId) {
+    where.push('c.user_id = ?');
+    params.push(options.userId);
+  }
+  const q = options.q?.trim();
+  if (q) {
+    where.push(`(
+      c.content LIKE ?
+      OR w.title LIKE ?
+      OR u.discord_username LIKE ?
+      OR u.discord_display_name LIKE ?
+      OR CAST(c.id AS TEXT) = ?
+    )`);
+    params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, q);
+  }
+
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const { page, pageSize, offset } = pageParams(options.page, options.pageSize, 200);
+  const total = (getDb().prepare(`
+    SELECT COUNT(*) as c
+    FROM comments c
+    JOIN users u ON u.id = c.user_id
+    JOIN works w ON w.id = c.work_id
+    ${whereSql}
+  `).get(...params) as { c: number }).c;
+  const comments = getDb().prepare(`
+    SELECT c.*, u.discord_username as username, u.discord_display_name as display_name, u.discord_avatar as avatar,
+           w.title as work_title, w.user_id as work_author_id
+    FROM comments c
+    JOIN users u ON u.id = c.user_id
+    JOIN works w ON w.id = c.work_id
+    ${whereSql}
+    ORDER BY c.created_at DESC, c.id DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, pageSize, offset) as DbComment[];
+  return pageResult(comments, total, page, pageSize);
 }
 
 export function hideComment(commentId: number, byUserId: number, role: 'author' | 'admin' | 'user', reason: string): boolean {

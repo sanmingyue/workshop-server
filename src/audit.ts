@@ -57,6 +57,8 @@ const ACTION_LABELS: Record<string, string> = {
   user_unbanned: '管理员解封用户',
   password_revealed_by_admin: '管理员查阅用户密码',
   audit_logs_downloaded: '管理员下载操作日志',
+  download_fingerprint_traced: '管理员追溯下载指纹',
+  download_fingerprint_trace_failed: '管理员追溯下载指纹失败',
 };
 
 export interface AuditLogInput {

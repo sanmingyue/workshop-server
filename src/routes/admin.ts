@@ -1,24 +1,21 @@
 import { Router, Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
+import multer from 'multer';
 import { requireAdmin } from '../auth/middleware';
 import { config } from '../config';
 import { adminPageHtml } from '../adminPage';
 import { queryAuditLogs, recordAuditLog, serializeAuditLogs } from '../audit';
+import { extractFingerprintTokenFromBuffer, extractFingerprintTokenFromText, isFingerprintToken } from '../fingerprint';
 import {
   approveWork,
   banUser,
   deleteCommentByAdmin,
   deleteWork,
-  getAllCommentsAdmin,
-  getAllUsers,
   getAllVersionsAdmin,
-  getAllWorksAdmin,
   getCommentById,
   getDb,
-  getDownloadsAdmin,
-  getFavoritesAdmin,
-  getLikesAdmin,
+  findDownloadByFingerprint,
   getPendingWorks,
   getStats,
   getWorkById,
@@ -28,9 +25,30 @@ import {
   hideWorkByAdmin,
   rejectWork,
   restoreWorkByAdmin,
+  searchCommentsAdmin,
+  searchDownloadsAdmin,
+  searchFavoritesAdmin,
+  searchLikesAdmin,
+  searchUsersAdmin,
+  searchWorksAdmin,
 } from '../database';
 
 const router = Router();
+const traceUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+
+function intQuery(req: Request, key: string): number | undefined {
+  const value = req.query[key];
+  if (value == null || value === '') return undefined;
+  const parsed = parseInt(String(value));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function pageQuery(req: Request): { page?: number; pageSize?: number } {
+  return {
+    page: intQuery(req, 'page'),
+    pageSize: intQuery(req, 'page_size'),
+  };
+}
 
 function safeJsonTags(tags: string): string[] {
   try {
@@ -78,11 +96,21 @@ router.get('/api/stats', requireAdmin, (_req: Request, res: Response) => {
 });
 
 router.get('/api/works', requireAdmin, (req: Request, res: Response) => {
-  const status = req.query.status as string | undefined;
-  const type = req.query.type as string | undefined;
-  const visibility = req.query.visibility as string | undefined;
-  const works = getAllWorksAdmin(status, type, visibility);
-  res.json({ works: works.map(workPayload) });
+  const result = searchWorksAdmin({
+    status: req.query.status as string | undefined,
+    type: req.query.type as string | undefined,
+    visibility: req.query.visibility as string | undefined,
+    q: req.query.q as string | undefined,
+    userId: intQuery(req, 'user_id'),
+    ...pageQuery(req),
+  });
+  res.json({
+    works: result.items.map(workPayload),
+    total: result.total,
+    page: result.page,
+    page_size: result.page_size,
+    total_pages: result.total_pages,
+  });
 });
 
 router.get('/api/works/pending', requireAdmin, (_req: Request, res: Response) => {
@@ -219,15 +247,18 @@ router.delete('/api/works/:id', requireAdmin, (req: Request, res: Response) => {
   res.json({ message: '已真删除' });
 });
 
-router.get('/api/users', requireAdmin, (_req: Request, res: Response) => {
-  const users = getAllUsers();
+router.get('/api/users', requireAdmin, (req: Request, res: Response) => {
+  const result = searchUsersAdmin({
+    q: req.query.q as string | undefined,
+    ...pageQuery(req),
+  });
   const passwords = getDb().prepare(
     'SELECT user_id, password_plain, password_updated_at FROM user_passwords'
   ).all() as { user_id: number; password_plain: string; password_updated_at: string }[];
   const pwdMap = new Map(passwords.map(p => [p.user_id, p]));
 
   res.json({
-    users: users.map(u => {
+    users: result.items.map(u => {
       const pwd = pwdMap.get(u.id);
       return {
         ...u,
@@ -236,6 +267,10 @@ router.get('/api/users', requireAdmin, (_req: Request, res: Response) => {
         password_updated_at: pwd?.password_updated_at || '',
       };
     }),
+    total: result.total,
+    page: result.page,
+    page_size: result.page_size,
+    total_pages: result.total_pages,
   });
 });
 
@@ -284,8 +319,52 @@ router.post('/api/users/:id/ban', requireAdmin, (req: Request, res: Response) =>
 });
 
 router.get('/api/comments', requireAdmin, (req: Request, res: Response) => {
-  const status = req.query.status as string | undefined;
-  res.json({ comments: getAllCommentsAdmin(status) });
+  const result = searchCommentsAdmin({
+    status: req.query.status as string | undefined,
+    workId: intQuery(req, 'work_id'),
+    userId: intQuery(req, 'user_id'),
+    q: req.query.q as string | undefined,
+    ...pageQuery(req),
+  });
+  res.json({
+    comments: result.items,
+    total: result.total,
+    page: result.page,
+    page_size: result.page_size,
+    total_pages: result.total_pages,
+  });
+});
+
+router.get('/api/works/:id/comments', requireAdmin, (req: Request, res: Response) => {
+  const result = searchCommentsAdmin({
+    workId: parseInt(req.params.id as string),
+    status: req.query.status as string | undefined,
+    q: req.query.q as string | undefined,
+    ...pageQuery(req),
+  });
+  res.json({
+    comments: result.items,
+    total: result.total,
+    page: result.page,
+    page_size: result.page_size,
+    total_pages: result.total_pages,
+  });
+});
+
+router.get('/api/users/:id/comments', requireAdmin, (req: Request, res: Response) => {
+  const result = searchCommentsAdmin({
+    userId: parseInt(req.params.id as string),
+    status: req.query.status as string | undefined,
+    q: req.query.q as string | undefined,
+    ...pageQuery(req),
+  });
+  res.json({
+    comments: result.items,
+    total: result.total,
+    page: result.page,
+    page_size: result.page_size,
+    total_pages: result.total_pages,
+  });
 });
 
 router.post('/api/comments/:id/hide', requireAdmin, (req: Request, res: Response) => {
@@ -322,18 +401,51 @@ router.delete('/api/comments/:id', requireAdmin, (req: Request, res: Response) =
 });
 
 router.get('/api/downloads', requireAdmin, (req: Request, res: Response) => {
-  const limit = Math.min(1000, Math.max(1, parseInt(req.query.limit as string) || 300));
-  res.json({ downloads: getDownloadsAdmin(limit) });
+  const result = searchDownloadsAdmin({
+    userId: intQuery(req, 'user_id'),
+    workId: intQuery(req, 'work_id'),
+    q: req.query.q as string | undefined,
+    ...pageQuery(req),
+  });
+  res.json({
+    downloads: result.items,
+    total: result.total,
+    page: result.page,
+    page_size: result.page_size,
+    total_pages: result.total_pages,
+  });
 });
 
 router.get('/api/favorites', requireAdmin, (req: Request, res: Response) => {
-  const limit = Math.min(1000, Math.max(1, parseInt(req.query.limit as string) || 300));
-  res.json({ favorites: getFavoritesAdmin(limit) });
+  const result = searchFavoritesAdmin({
+    userId: intQuery(req, 'user_id'),
+    workId: intQuery(req, 'work_id'),
+    q: req.query.q as string | undefined,
+    ...pageQuery(req),
+  });
+  res.json({
+    favorites: result.items,
+    total: result.total,
+    page: result.page,
+    page_size: result.page_size,
+    total_pages: result.total_pages,
+  });
 });
 
 router.get('/api/likes', requireAdmin, (req: Request, res: Response) => {
-  const limit = Math.min(1000, Math.max(1, parseInt(req.query.limit as string) || 300));
-  res.json({ likes: getLikesAdmin(limit) });
+  const result = searchLikesAdmin({
+    userId: intQuery(req, 'user_id'),
+    workId: intQuery(req, 'work_id'),
+    q: req.query.q as string | undefined,
+    ...pageQuery(req),
+  });
+  res.json({
+    likes: result.items,
+    total: result.total,
+    page: result.page,
+    page_size: result.page_size,
+    total_pages: result.total_pages,
+  });
 });
 
 router.get('/api/logs', requireAdmin, (req: Request, res: Response) => {
@@ -407,6 +519,51 @@ router.get('/api/trace/works/:id', requireAdmin, (req: Request, res: Response) =
         return false;
       }
     })].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))),
+  });
+});
+
+router.post('/api/fingerprint/trace', requireAdmin, traceUpload.single('file'), (req: Request, res: Response) => {
+  const direct = String(req.body?.fingerprint || '').trim();
+  const content = String(req.body?.content || '');
+  let fingerprint = isFingerprintToken(direct) ? direct : undefined;
+  if (!fingerprint && content) fingerprint = extractFingerprintTokenFromText(content);
+  if (!fingerprint && req.file?.buffer) fingerprint = extractFingerprintTokenFromBuffer(req.file.buffer);
+
+  if (!fingerprint) {
+    recordAuditLog({
+      req,
+      category: 'security',
+      action: 'download_fingerprint_trace_failed',
+      entityType: 'download_fingerprint',
+      success: false,
+      detail: { 原因: '未识别到下载指纹' },
+    });
+    res.status(400).json({ error: '未识别到下载指纹' });
+    return;
+  }
+
+  const download = findDownloadByFingerprint(fingerprint);
+  recordAuditLog({
+    req,
+    category: 'security',
+    action: 'download_fingerprint_traced',
+    entityType: 'download_fingerprint',
+    entityId: fingerprint,
+    targetUserId: download?.user_id,
+    success: !!download,
+    detail: {
+      指纹: fingerprint,
+      是否匹配: !!download,
+      下载记录ID: download?.id || '',
+      作品ID: download?.work_id || '',
+      用户ID: download?.user_id || '',
+    },
+  });
+
+  res.json({
+    found: !!download,
+    fingerprint,
+    download: download || null,
   });
 });
 

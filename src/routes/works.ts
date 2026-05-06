@@ -12,6 +12,7 @@ import {
   createWorkVersion,
   getApprovedWorks,
   getCommentById,
+  getDownloadFileRecord,
   getUserFavoriteWorkIds,
   getUserLikedWorkIds,
   getWorkById,
@@ -27,6 +28,7 @@ import {
   type DbUser,
   type WorkWithAuthor,
 } from '../database';
+import { embedPngFingerprint, embedTextFingerprint } from '../fingerprint';
 
 const router = Router();
 
@@ -104,6 +106,11 @@ function publicWorkPayload(w: WorkWithAuthor, likedSet = new Set<number>(), favo
   };
 }
 
+function contentPreview(content: string): string {
+  if (!content) return '';
+  return content.length > 2000 ? `${content.slice(0, 2000)}...` : content;
+}
+
 router.get('/', (req: Request, res: Response) => {
   const page = Math.max(1, parseInt(req.query.page as string) || 1);
   const pageSize = Math.min(50, Math.max(1, parseInt(req.query.page_size as string) || 12));
@@ -128,6 +135,30 @@ router.get('/', (req: Request, res: Response) => {
 
 router.get('/tags', (_req: Request, res: Response) => {
   res.json({ tags: getAllTags() });
+});
+
+router.get('/download-files/:downloadId', (req: Request, res: Response) => {
+  const downloadId = parseInt(req.params.downloadId as string);
+  const key = String(req.query.key || '');
+  const record = getDownloadFileRecord(downloadId, key);
+  if (!record || record.file_type !== 'png' || !record.content?.startsWith('__card_file__:')) {
+    res.status(404).json({ error: '文件不存在' });
+    return;
+  }
+
+  const filename = String(record.content).replace('__card_file__:', '');
+  const filePath = path.join(uploadsDir, filename);
+  if (!fs.existsSync(filePath)) {
+    res.status(404).json({ error: '文件不存在' });
+    return;
+  }
+
+  const original = fs.readFileSync(filePath);
+  const watermarked = embedPngFingerprint(original, record.fingerprint_token || '');
+  const safeTitle = String(record.work_title || `work-${record.work_id}`).replace(/[\\/:*?"<>|]/g, '_');
+  res.setHeader('Content-Type', 'image/png');
+  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(safeTitle)}.png"`);
+  res.send(watermarked);
 });
 
 router.get('/:id/comments', (req: Request, res: Response) => {
@@ -245,7 +276,7 @@ router.get('/:id', (req: Request, res: Response) => {
     title: work.title,
     description: work.description,
     type: work.type,
-    content: work.content,
+    content: work.type === 'collection' ? '' : contentPreview(work.content),
     tags: JSON.parse(work.tags || '[]'),
     cover_url: work.cover_filename ? `${config.baseUrl}/uploads/${work.cover_filename}` : null,
     card_link: work.card_link || '',
@@ -397,7 +428,7 @@ router.get('/:id/download', requireAuth, (req: Request, res: Response) => {
   if (work.status !== 'approved' && work.user_id !== req.user!.id) { res.status(404).json({ error: '作品不存在' }); return; }
 
   incrementDownloadCount(work.id);
-  recordDownload(req.user!.id, work.id, work.current_version_id || null, requestIp(req), String(req.headers['user-agent'] || ''));
+  const download = recordDownload(req.user!.id, work.id, work.current_version_id || null, requestIp(req), String(req.headers['user-agent'] || ''));
   recordAuditLog({
     req,
     targetUserId: work.user_id,
@@ -405,17 +436,16 @@ router.get('/:id/download', requireAuth, (req: Request, res: Response) => {
     action: 'work_downloaded',
     entityType: 'work',
     entityId: work.id,
-    detail: { 作品标题: work.title, 类型: work.type, 文件类型: work.file_type || 'json' },
+    detail: { 作品标题: work.title, 类型: work.type, 文件类型: work.file_type || 'json', 下载记录ID: download.id, 指纹: download.fingerprint_token },
   });
 
   if (work.file_type === 'png' && work.content.startsWith('__card_file__:')) {
-    const filename = work.content.replace('__card_file__:', '');
     res.json({
       id: work.id,
       title: work.title,
       type: work.type,
       content: '',
-      file_url: `${config.baseUrl}/uploads/${filename}`,
+      file_url: `${config.baseUrl}/api/works/download-files/${download.id}?key=${encodeURIComponent(download.file_token)}`,
       file_type: 'png',
       card_link: work.card_link || '',
       author_name: work.author_display_name || work.author_username,
@@ -427,7 +457,7 @@ router.get('/:id/download', requireAuth, (req: Request, res: Response) => {
     id: work.id,
     title: work.title,
     type: work.type,
-    content: work.content,
+    content: embedTextFingerprint(work.content, download.fingerprint_token),
     file_type: work.file_type || 'json',
     card_link: work.card_link || '',
     author_name: work.author_display_name || work.author_username,

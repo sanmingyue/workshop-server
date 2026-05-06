@@ -21,6 +21,7 @@ export const config = {
 
   get adminDiscordIds() { return envList('ADMIN_DISCORD_IDS'); },
   get sessionSecret() { return env('SESSION_SECRET', 'workshop-default-secret-change-me'); },
+  get fingerprintSecret() { return env('FINGERPRINT_SECRET', env('SESSION_SECRET', 'workshop-default-secret-change-me')); },
   get dataDir() { return env('DATA_DIR', '/data'); },
 
   maxFileSize: 5 * 1024 * 1024,
