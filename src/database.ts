@@ -56,6 +56,7 @@ export function initDatabase(): Database.Database {
       current_version_id INTEGER,
       last_version_no INTEGER DEFAULT 1,
       title TEXT NOT NULL,
+      char_name TEXT DEFAULT '',
       description TEXT DEFAULT '',
       type TEXT NOT NULL,
       content TEXT NOT NULL,
@@ -88,6 +89,7 @@ export function initDatabase(): Database.Database {
       work_id INTEGER NOT NULL,
       version_no INTEGER NOT NULL,
       title TEXT NOT NULL,
+      char_name TEXT DEFAULT '',
       description TEXT DEFAULT '',
       type TEXT NOT NULL,
       content TEXT NOT NULL,
@@ -104,6 +106,18 @@ export function initDatabase(): Database.Database {
       UNIQUE(work_id, version_no),
       FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE,
       FOREIGN KEY (reviewed_by) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS collection_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      collection_work_id INTEGER NOT NULL,
+      child_work_id INTEGER NOT NULL,
+      added_by INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(collection_work_id, child_work_id),
+      FOREIGN KEY (collection_work_id) REFERENCES works(id) ON DELETE CASCADE,
+      FOREIGN KEY (child_work_id) REFERENCES works(id) ON DELETE CASCADE,
+      FOREIGN KEY (added_by) REFERENCES users(id)
     );
 
     CREATE TABLE IF NOT EXISTS likes (
@@ -227,6 +241,7 @@ export function initDatabase(): Database.Database {
   };
 
   migrateColumn('works', 'card_link', "TEXT DEFAULT ''");
+  migrateColumn('works', 'char_name', "TEXT DEFAULT ''");
   migrateColumn('works', 'file_type', "TEXT DEFAULT 'json'");
   migrateColumn('works', 'current_version_id', 'INTEGER');
   migrateColumn('works', 'last_version_no', 'INTEGER DEFAULT 1');
@@ -238,6 +253,7 @@ export function initDatabase(): Database.Database {
   migrateColumn('works', 'author_delete_reason', "TEXT DEFAULT ''");
   migrateColumn('works', 'favorite_count', 'INTEGER DEFAULT 0');
   migrateColumn('works', 'comment_count', 'INTEGER DEFAULT 0');
+  migrateColumn('work_versions', 'char_name', "TEXT DEFAULT ''");
   migrateColumn('user_passwords', 'password_plain', "TEXT DEFAULT ''");
   migrateColumn('user_passwords', 'password_updated_at', "TEXT DEFAULT ''");
   migrateColumn('downloads', 'fingerprint_token', "TEXT DEFAULT ''");
@@ -249,12 +265,15 @@ export function initDatabase(): Database.Database {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_works_status ON works(status);
     CREATE INDEX IF NOT EXISTS idx_works_type ON works(type);
+    CREATE INDEX IF NOT EXISTS idx_works_char_name ON works(char_name);
     CREATE INDEX IF NOT EXISTS idx_works_user ON works(user_id);
     CREATE INDEX IF NOT EXISTS idx_works_visibility ON works(visibility);
     CREATE INDEX IF NOT EXISTS idx_works_status_visibility_created ON works(status, visibility, created_at);
     CREATE INDEX IF NOT EXISTS idx_works_user_created ON works(user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_work_versions_work ON work_versions(work_id);
     CREATE INDEX IF NOT EXISTS idx_work_versions_status ON work_versions(status);
+    CREATE INDEX IF NOT EXISTS idx_collection_items_collection ON collection_items(collection_work_id);
+    CREATE INDEX IF NOT EXISTS idx_collection_items_child ON collection_items(child_work_id);
     CREATE INDEX IF NOT EXISTS idx_likes_work ON likes(work_id);
     CREATE INDEX IF NOT EXISTS idx_likes_user ON likes(user_id);
     CREATE INDEX IF NOT EXISTS idx_likes_user_created ON likes(user_id, created_at);
@@ -301,9 +320,9 @@ function backfillWorkVersions(): void {
     `).all() as DbWork[];
     const insert = db.prepare(`
       INSERT INTO work_versions (
-        work_id, version_no, title, description, type, content, tags, cover_filename,
+        work_id, version_no, title, char_name, description, type, content, tags, cover_filename,
         card_link, file_type, status, reject_reason, created_at, updated_at, reviewed_at, reviewed_by
-      ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const update = db.prepare('UPDATE works SET current_version_id = ?, last_version_no = 1, created_at = COALESCE(NULLIF(created_at, \'\'), ?), updated_at = COALESCE(NULLIF(updated_at, \'\'), ?) WHERE id = ?');
 
@@ -314,6 +333,7 @@ function backfillWorkVersions(): void {
       const result = insert.run(
         row.id,
         row.title,
+        row.char_name || '',
         row.description || '',
         row.type,
         row.content,
@@ -449,6 +469,7 @@ export interface DbWork {
   current_version_id: number | null;
   last_version_no: number;
   title: string;
+  char_name: string;
   description: string;
   type: string;
   content: string;
@@ -479,6 +500,7 @@ export interface DbWorkVersion {
   work_id: number;
   version_no: number;
   title: string;
+  char_name: string;
   description: string;
   type: string;
   content: string;
@@ -502,6 +524,7 @@ export interface WorkWithAuthor extends DbWork {
   pending_version_id?: number | null;
   pending_version_no?: number | null;
   pending_title?: string;
+  pending_char_name?: string;
   pending_description?: string;
   pending_content?: string;
   pending_tags?: string;
@@ -617,6 +640,7 @@ function selectWorkWithAuthor(where: string, params: unknown[], orderBy: string)
       pv.id as pending_version_id,
       pv.version_no as pending_version_no,
       pv.title as pending_title,
+      pv.char_name as pending_char_name,
       pv.description as pending_description,
       pv.content as pending_content,
       pv.tags as pending_tags,
@@ -641,6 +665,7 @@ function selectWorkWithAuthor(where: string, params: unknown[], orderBy: string)
 export function createWork(
   userId: number,
   title: string,
+  charName: string,
   description: string,
   type: string,
   content: string,
@@ -653,17 +678,17 @@ export function createWork(
     const now = currentIso();
     const result = getDb().prepare(`
       INSERT INTO works (
-        user_id, last_version_no, title, description, type, content, tags, cover_filename,
+        user_id, last_version_no, title, char_name, description, type, content, tags, cover_filename,
         card_link, file_type, status, visibility, created_at, updated_at
-      ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'public', ?, ?)
-    `).run(userId, title, description, type, content, JSON.stringify(tags), coverFilename, cardLink, fileType, now, now);
+      ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'public', ?, ?)
+    `).run(userId, title, charName, description, type, content, JSON.stringify(tags), coverFilename, cardLink, fileType, now, now);
     const workId = result.lastInsertRowid as number;
     const version = getDb().prepare(`
       INSERT INTO work_versions (
-        work_id, version_no, title, description, type, content, tags, cover_filename,
+        work_id, version_no, title, char_name, description, type, content, tags, cover_filename,
         card_link, file_type, status, created_at, updated_at
-      ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
-    `).run(workId, title, description, type, content, JSON.stringify(tags), coverFilename, cardLink, fileType, now, now);
+      ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+    `).run(workId, title, charName, description, type, content, JSON.stringify(tags), coverFilename, cardLink, fileType, now, now);
     getDb().prepare('UPDATE works SET current_version_id = ? WHERE id = ?').run(version.lastInsertRowid, workId);
     return workId;
   });
@@ -679,6 +704,7 @@ export function createWorkVersion(
   coverFilename?: string,
   cardLink?: string,
   fileType?: string,
+  charName?: string,
 ): number {
   const tx = getDb().transaction(() => {
     const now = currentIso();
@@ -686,20 +712,21 @@ export function createWorkVersion(
     const finalCover = coverFilename !== undefined ? coverFilename : work.cover_filename;
     const finalCardLink = cardLink !== undefined ? cardLink : work.card_link;
     const finalFileType = fileType !== undefined ? fileType : work.file_type;
+    const finalCharName = charName !== undefined ? charName : work.char_name;
     const result = getDb().prepare(`
       INSERT INTO work_versions (
-        work_id, version_no, title, description, type, content, tags, cover_filename,
+        work_id, version_no, title, char_name, description, type, content, tags, cover_filename,
         card_link, file_type, status, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
-    `).run(work.id, nextVersion, title, description, work.type, content, JSON.stringify(tags), finalCover, finalCardLink, finalFileType, now, now);
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+    `).run(work.id, nextVersion, title, finalCharName, description, work.type, content, JSON.stringify(tags), finalCover, finalCardLink, finalFileType, now, now);
 
     if (work.status !== 'approved') {
       getDb().prepare(`
         UPDATE works
-        SET current_version_id = ?, last_version_no = ?, title = ?, description = ?, content = ?, tags = ?,
+        SET current_version_id = ?, last_version_no = ?, title = ?, char_name = ?, description = ?, content = ?, tags = ?,
             cover_filename = ?, card_link = ?, file_type = ?, status = 'pending', reject_reason = '', updated_at = ?
         WHERE id = ?
-      `).run(result.lastInsertRowid, nextVersion, title, description, content, JSON.stringify(tags), finalCover, finalCardLink, finalFileType, now, work.id);
+      `).run(result.lastInsertRowid, nextVersion, title, finalCharName, description, content, JSON.stringify(tags), finalCover, finalCardLink, finalFileType, now, work.id);
     } else {
       getDb().prepare('UPDATE works SET last_version_no = ?, updated_at = ? WHERE id = ?').run(nextVersion, now, work.id);
     }
@@ -725,8 +752,8 @@ export function getApprovedWorks(
     params.push(type);
   }
   if (search) {
-    whereParts.push('(w.title LIKE ? OR w.description LIKE ?)');
-    params.push(`%${search}%`, `%${search}%`);
+    whereParts.push('(w.title LIKE ? OR w.char_name LIKE ? OR w.description LIKE ?)');
+    params.push(`%${search}%`, `%${search}%`, `%${search}%`);
   }
   if (tag) {
     whereParts.push('w.tags LIKE ?');
@@ -749,6 +776,101 @@ export function getWorkById(workId: number): WorkWithAuthor | undefined {
 
 export function getUserWorks(userId: number): WorkWithAuthor[] {
   return selectWorkWithAuthor('WHERE w.user_id = ?', [userId], 'ORDER BY w.created_at DESC');
+}
+
+function normalizeWorkIds(ids: number[]): number[] {
+  return [...new Set(ids.map(id => Number(id)).filter(id => Number.isInteger(id) && id > 0))];
+}
+
+export function validateCollectionChildIds(authorId: number, childIds: number[]): number[] {
+  const normalized = normalizeWorkIds(childIds);
+  if (normalized.length === 0) throw new Error('合集至少需要选择一个作品');
+  if (normalized.length > 200) throw new Error('单个合集最多添加200个作品');
+
+  const placeholders = normalized.map(() => '?').join(',');
+  const rows = getDb().prepare(`
+    SELECT id
+    FROM works
+    WHERE id IN (${placeholders})
+      AND user_id = ?
+      AND type != 'collection'
+      AND status = 'approved'
+      AND visibility = 'public'
+  `).all(...normalized, authorId) as { id: number }[];
+  const validIds = new Set(rows.map(r => r.id));
+  const invalid = normalized.filter(id => !validIds.has(id));
+  if (invalid.length > 0) {
+    throw new Error('只能添加自己已通过且公开的非合集作品');
+  }
+  return normalized;
+}
+
+function assertOwnedCollection(collectionWorkId: number, authorId: number): DbWork {
+  const collection = getDb().prepare('SELECT * FROM works WHERE id = ? AND user_id = ?').get(collectionWorkId, authorId) as DbWork | undefined;
+  if (!collection) throw new Error('合集不存在或无权修改');
+  if (collection.type !== 'collection') throw new Error('目标作品不是作者合集');
+  if (collection.visibility === 'author_deleted') throw new Error('已删除合集不能继续修改');
+  return collection;
+}
+
+export function setCollectionChildren(collectionWorkId: number, authorId: number, childIds: number[]): number {
+  const tx = getDb().transaction(() => {
+    assertOwnedCollection(collectionWorkId, authorId);
+    const normalized = validateCollectionChildIds(authorId, childIds);
+    const now = currentIso();
+    getDb().prepare('DELETE FROM collection_items WHERE collection_work_id = ?').run(collectionWorkId);
+    const insert = getDb().prepare(`
+      INSERT OR IGNORE INTO collection_items (collection_work_id, child_work_id, added_by, created_at)
+      VALUES (?, ?, ?, ?)
+    `);
+    for (const childId of normalized) {
+      insert.run(collectionWorkId, childId, authorId, now);
+    }
+    getDb().prepare('UPDATE works SET updated_at = ? WHERE id = ?').run(now, collectionWorkId);
+    return normalized.length;
+  });
+  return tx();
+}
+
+export function appendCollectionChildren(collectionWorkId: number, authorId: number, childIds: number[]): { added: number; total: number } {
+  const tx = getDb().transaction(() => {
+    assertOwnedCollection(collectionWorkId, authorId);
+    const normalized = validateCollectionChildIds(authorId, childIds);
+    const now = currentIso();
+    const insert = getDb().prepare(`
+      INSERT OR IGNORE INTO collection_items (collection_work_id, child_work_id, added_by, created_at)
+      VALUES (?, ?, ?, ?)
+    `);
+    let added = 0;
+    for (const childId of normalized) {
+      const result = insert.run(collectionWorkId, childId, authorId, now);
+      added += result.changes;
+    }
+    getDb().prepare('UPDATE works SET updated_at = ? WHERE id = ?').run(now, collectionWorkId);
+    const total = (getDb().prepare('SELECT COUNT(*) as c FROM collection_items WHERE collection_work_id = ?').get(collectionWorkId) as { c: number }).c;
+    return { added, total };
+  });
+  return tx();
+}
+
+export function getCollectionChildren(collectionWorkId: number): WorkWithAuthor[] {
+  return selectWorkWithAuthor(
+    `WHERE w.id IN (
+      SELECT child_work_id
+      FROM collection_items
+      WHERE collection_work_id = ?
+    ) AND w.status = 'approved' AND w.visibility = 'public'`,
+    [collectionWorkId, collectionWorkId],
+    `ORDER BY (
+      SELECT ci.created_at
+      FROM collection_items ci
+      WHERE ci.collection_work_id = ? AND ci.child_work_id = w.id
+    ) ASC, w.id ASC`,
+  );
+}
+
+export function getCollectionChildrenCount(collectionWorkId: number): number {
+  return (getDb().prepare('SELECT COUNT(*) as c FROM collection_items WHERE collection_work_id = ?').get(collectionWorkId) as { c: number }).c;
 }
 
 export function getPendingWorks(): WorkWithAuthor[] {
@@ -801,13 +923,14 @@ export function searchWorksAdmin(options: AdminWorkSearchOptions): PageResult<Wo
   if (q) {
     where.push(`(
       w.title LIKE ?
+      OR w.char_name LIKE ?
       OR w.description LIKE ?
       OR w.tags LIKE ?
       OR u.discord_username LIKE ?
       OR u.discord_display_name LIKE ?
       OR CAST(w.id AS TEXT) = ?
     )`);
-    params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, q);
+    params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, q);
   }
 
   const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
@@ -875,13 +998,14 @@ export function approveWork(workId: number, reviewerId: number, versionId?: numb
       .run(now, reviewerId, now, version.id);
     getDb().prepare(`
       UPDATE works
-      SET current_version_id = ?, title = ?, description = ?, type = ?, content = ?, tags = ?,
+      SET current_version_id = ?, title = ?, char_name = ?, description = ?, type = ?, content = ?, tags = ?,
           cover_filename = ?, card_link = ?, file_type = ?, status = 'approved', reject_reason = '',
           reviewed_at = ?, reviewed_by = ?, updated_at = ?
       WHERE id = ?
     `).run(
       version.id,
       version.title,
+      version.char_name,
       version.description,
       version.type,
       version.content,
@@ -913,13 +1037,14 @@ export function rejectWork(workId: number, reviewerId: number, reason: string, v
     } else {
       getDb().prepare(`
         UPDATE works
-        SET current_version_id = ?, title = ?, description = ?, type = ?, content = ?, tags = ?,
+        SET current_version_id = ?, title = ?, char_name = ?, description = ?, type = ?, content = ?, tags = ?,
             cover_filename = ?, card_link = ?, file_type = ?, status = 'rejected', reject_reason = ?,
             reviewed_at = ?, reviewed_by = ?, updated_at = ?
         WHERE id = ?
       `).run(
         version.id,
         version.title,
+        version.char_name,
         version.description,
         version.type,
         version.content,
@@ -1167,7 +1292,9 @@ export function searchDownloadsAdmin(options: AdminActivitySearchOptions): PageR
 
 export function getUserDownloads(userId: number): any[] {
   return getDb().prepare(`
-    SELECT d.*, w.title, w.description, w.type, w.cover_filename, w.status, w.visibility,
+    SELECT d.*, w.title, w.char_name, w.description, w.type, w.tags, w.cover_filename,
+           w.card_link, w.file_type, w.download_count, w.like_count, w.favorite_count, w.comment_count,
+           w.status, w.visibility,
            author.discord_username as author_username, author.discord_display_name as author_display_name
     FROM downloads d
     JOIN works w ON w.id = d.work_id
@@ -1313,7 +1440,9 @@ export function searchFavoritesAdmin(options: AdminActivitySearchOptions): PageR
 
 export function getUserFavorites(userId: number): any[] {
   return getDb().prepare(`
-    SELECT f.*, w.title, w.description, w.type, w.cover_filename, w.status, w.visibility,
+    SELECT f.*, w.title, w.char_name, w.description, w.type, w.tags, w.cover_filename,
+           w.card_link, w.file_type, w.download_count, w.like_count, w.favorite_count, w.comment_count,
+           w.status, w.visibility,
            author.discord_username as author_username, author.discord_display_name as author_display_name
     FROM favorites f
     JOIN works w ON w.id = f.work_id

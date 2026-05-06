@@ -7,9 +7,11 @@ import { config } from '../config';
 import { getOptionalUser, requireAuth } from '../auth/middleware';
 import { recordAuditLog } from '../audit';
 import {
+  appendCollectionChildren,
   createComment,
   createWork,
   createWorkVersion,
+  getCollectionChildren,
   getApprovedWorks,
   getCommentById,
   getDownloadFileRecord,
@@ -24,6 +26,8 @@ import {
   toggleFavorite,
   toggleLike,
   updateComment,
+  setCollectionChildren,
+  validateCollectionChildIds,
   getAllTags,
   type DbUser,
   type WorkWithAuthor,
@@ -83,14 +87,28 @@ function parseTags(tags: unknown): string[] {
   }
 }
 
+function parseIdArray(value: unknown): number[] {
+  if (!value) return [];
+  try {
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(id => Number(id)).filter(id => Number.isInteger(id) && id > 0);
+  } catch {
+    return [];
+  }
+}
+
 function publicWorkPayload(w: WorkWithAuthor, likedSet = new Set<number>(), favoriteSet = new Set<number>()) {
   return {
     id: w.id,
     title: w.title,
+    char_name: w.char_name || '',
     description: w.description,
     type: w.type,
     tags: JSON.parse(w.tags || '[]'),
     cover_url: w.cover_filename ? `${config.baseUrl}/uploads/${w.cover_filename}` : null,
+    card_link: w.card_link || '',
+    file_type: w.file_type || 'json',
     author: {
       username: w.author_username,
       display_name: w.author_display_name,
@@ -103,6 +121,19 @@ function publicWorkPayload(w: WorkWithAuthor, likedSet = new Set<number>(), favo
     liked: likedSet.has(w.id),
     favorited: favoriteSet.has(w.id),
     created_at: w.created_at,
+  };
+}
+
+function workContentForPreview(w: WorkWithAuthor): string {
+  if (w.type === 'collection') return '';
+  if (w.file_type === 'png' && w.content?.startsWith('__card_file__:')) return '';
+  return contentPreview(w.content);
+}
+
+function collectionChildPayload(w: WorkWithAuthor, likedSet = new Set<number>(), favoriteSet = new Set<number>()) {
+  return {
+    ...publicWorkPayload(w, likedSet, favoriteSet),
+    content: workContentForPreview(w),
   };
 }
 
@@ -270,13 +301,19 @@ router.get('/:id', (req: Request, res: Response) => {
   if (!canViewWork(work, user)) { res.status(404).json({ error: '作品不存在' }); return; }
   const liked = user ? getUserLikedWorkIds(user.id).includes(work.id) : false;
   const favorited = user ? getUserFavoriteWorkIds(user.id).includes(work.id) : false;
+  const likedSet = new Set(user ? getUserLikedWorkIds(user.id) : []);
+  const favoriteSet = new Set(user ? getUserFavoriteWorkIds(user.id) : []);
+  const children = work.type === 'collection'
+    ? getCollectionChildren(work.id).map(child => collectionChildPayload(child, likedSet, favoriteSet))
+    : undefined;
 
   res.json({
     id: work.id,
     title: work.title,
+    char_name: work.char_name || '',
     description: work.description,
     type: work.type,
-    content: work.type === 'collection' ? '' : contentPreview(work.content),
+    content: workContentForPreview(work),
     tags: JSON.parse(work.tags || '[]'),
     cover_url: work.cover_filename ? `${config.baseUrl}/uploads/${work.cover_filename}` : null,
     card_link: work.card_link || '',
@@ -298,6 +335,7 @@ router.get('/:id', (req: Request, res: Response) => {
     like_count: work.like_count,
     favorite_count: work.favorite_count || 0,
     comment_count: work.comment_count || 0,
+    children,
     liked,
     favorited,
     created_at: work.created_at,
@@ -309,21 +347,30 @@ router.post('/', requireAuth, upload.fields([
   { name: 'cover', maxCount: 1 },
   { name: 'card_file', maxCount: 1 },
 ]), (req: Request, res: Response) => {
-  const { title, description, type, content, tags, card_link, file_type, disclaimer_agreed } = req.body;
+  const { title, description, type, content, tags, card_link, file_type, char_name, child_ids } = req.body;
   const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
 
   if (!title || !title.trim()) { res.status(400).json({ error: '标题不能为空' }); return; }
   if (!type || !VALID_TYPES.includes(type)) { res.status(400).json({ error: `无效的类型，支持: ${VALID_TYPES.join(', ')}` }); return; }
+  const finalCharName = (char_name || '').trim();
+  if ((type === 'persona' || type === 'card_addon') && !finalCharName) { res.status(400).json({ error: '人设/OC与角色卡二创必须填写角色名' }); return; }
   if (type === 'card_addon' && (!card_link || !card_link.trim())) { res.status(400).json({ error: '角色卡配套类型必须填写角色卡链接' }); return; }
-  if (type === 'collection' && disclaimer_agreed !== 'true') { res.status(400).json({ error: '作者合集类型需要同意授权声明' }); return; }
 
   let finalContent = content || '';
   let finalFileType = file_type || 'json';
+  let collectionChildIds: number[] = [];
   if (type === 'collection') {
-    const cardFile = files?.card_file?.[0];
-    if (!cardFile) { res.status(400).json({ error: '作者合集类型必须上传角色卡 PNG 文件' }); return; }
-    finalContent = `__card_file__:${cardFile.filename}`;
-    finalFileType = 'png';
+    const coverFile = files?.cover?.[0];
+    if (!coverFile) { res.status(400).json({ error: '作者合集必须上传封面图' }); return; }
+    collectionChildIds = parseIdArray(child_ids);
+    try {
+      collectionChildIds = validateCollectionChildIds(req.user!.id, collectionChildIds);
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || '合集作品选择无效' });
+      return;
+    }
+    finalContent = '';
+    finalFileType = 'json';
   } else {
     if (!finalContent || !finalContent.trim()) { res.status(400).json({ error: '内容不能为空' }); return; }
     if (Buffer.byteLength(finalContent, 'utf8') > config.maxContentSize) { res.status(400).json({ error: '内容过大，最大 1MB' }); return; }
@@ -331,7 +378,10 @@ router.post('/', requireAuth, upload.fields([
 
   const parsedTags = parseTags(tags);
   const coverFilename = files?.cover?.[0]?.filename || '';
-  const workId = createWork(req.user!.id, title.trim(), (description || '').trim(), type, finalContent, parsedTags, coverFilename, (card_link || '').trim(), finalFileType);
+  const workId = createWork(req.user!.id, title.trim(), finalCharName, (description || '').trim(), type, finalContent, parsedTags, coverFilename, (card_link || '').trim(), finalFileType);
+  if (type === 'collection') {
+    setCollectionChildren(workId, req.user!.id, collectionChildIds);
+  }
 
   recordAuditLog({
     req,
@@ -339,9 +389,30 @@ router.post('/', requireAuth, upload.fields([
     action: 'work_created',
     entityType: 'work',
     entityId: workId,
-    detail: { 作品标题: title.trim(), 类型: type, 标签: parsedTags, 文件类型: finalFileType, 是否有封面: !!coverFilename },
+    detail: { 作品标题: title.trim(), 角色名: finalCharName, 类型: type, 标签: parsedTags, 文件类型: finalFileType, 是否有封面: !!coverFilename, 子作品ID: collectionChildIds },
   });
   res.status(201).json({ id: workId, message: '作品已提交，等待审核' });
+});
+
+router.put('/:id/children', requireAuth, (req: Request, res: Response) => {
+  const collectionId = parseInt(req.params.id as string);
+  const addIds = parseIdArray(req.body?.add_ids);
+  if (addIds.length === 0) { res.status(400).json({ error: '请选择要添加的作品' }); return; }
+
+  try {
+    const result = appendCollectionChildren(collectionId, req.user!.id, addIds);
+    recordAuditLog({
+      req,
+      category: 'work',
+      action: 'collection_children_added',
+      entityType: 'work',
+      entityId: collectionId,
+      detail: { 合集ID: collectionId, 添加作品ID: addIds, 实际新增: result.added, 当前数量: result.total },
+    });
+    res.json({ message: `已添加 ${result.added} 件作品`, children_count: result.total });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || '添加失败' });
+  }
 });
 
 router.put('/:id', requireAuth, upload.single('cover'), (req: Request, res: Response) => {
@@ -349,15 +420,22 @@ router.put('/:id', requireAuth, upload.single('cover'), (req: Request, res: Resp
   if (!work || work.user_id !== req.user!.id) { res.status(404).json({ error: '作品不存在或无权修改' }); return; }
   if (work.visibility === 'author_deleted') { res.status(400).json({ error: '已删除作品不能继续更新' }); return; }
 
-  const { title, description, content, tags } = req.body;
+  const { title, description, content, tags, char_name, card_link, file_type } = req.body;
   const parsedTags = tags ? parseTags(tags) : JSON.parse(work.tags || '[]');
+  const nextCharName = char_name !== undefined ? String(char_name || '').trim() : work.char_name || '';
+  if ((work.type === 'persona' || work.type === 'card_addon') && !nextCharName) { res.status(400).json({ error: '人设/OC与角色卡二创必须填写角色名' }); return; }
+  const nextCardLink = card_link !== undefined ? String(card_link || '').trim() : work.card_link;
+  if (work.type === 'card_addon' && !nextCardLink) { res.status(400).json({ error: '角色卡二创必须填写角色卡链接' }); return; }
   const versionId = createWorkVersion(
     work,
     (title || work.title).trim(),
     (description ?? work.description).trim(),
-    content || work.content,
+    work.type === 'collection' ? work.content : (content || work.content),
     parsedTags,
     req.file?.filename,
+    nextCardLink,
+    file_type !== undefined ? String(file_type || work.file_type) : undefined,
+    nextCharName,
   );
 
   recordAuditLog({
@@ -443,6 +521,7 @@ router.get('/:id/download', requireAuth, (req: Request, res: Response) => {
     res.json({
       id: work.id,
       title: work.title,
+      char_name: work.char_name || '',
       type: work.type,
       content: '',
       file_url: `${config.baseUrl}/api/works/download-files/${download.id}?key=${encodeURIComponent(download.file_token)}`,
@@ -456,6 +535,7 @@ router.get('/:id/download', requireAuth, (req: Request, res: Response) => {
   res.json({
     id: work.id,
     title: work.title,
+    char_name: work.char_name || '',
     type: work.type,
     content: embedTextFingerprint(work.content, download.fingerprint_token),
     file_type: work.file_type || 'json',

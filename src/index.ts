@@ -63,6 +63,7 @@ app.get('/api/my/works', requireAuth, (req, res) => {
     works: works.map(w => ({
       id: w.id,
       title: w.title,
+      char_name: w.char_name || '',
       description: w.description,
       type: w.type,
       tags: JSON.parse(w.tags || '[]'),
@@ -88,11 +89,60 @@ app.get('/api/my/works', requireAuth, (req, res) => {
 });
 
 app.get('/api/my/downloads', requireAuth, (req, res) => {
-  res.json({ downloads: getUserDownloads(req.user!.id) });
+  res.json({
+    downloads: getUserDownloads(req.user!.id).map(w => ({
+      id: w.id,
+      work_id: w.work_id,
+      title: w.title,
+      char_name: w.char_name || '',
+      description: w.description || '',
+      type: w.type,
+      tags: JSON.parse(w.tags || '[]'),
+      cover_url: w.cover_filename ? `${config.baseUrl}/uploads/${w.cover_filename}` : null,
+      card_link: w.card_link || '',
+      file_type: w.file_type || 'json',
+      status: w.status,
+      visibility: w.visibility,
+      download_count: w.download_count || 0,
+      like_count: w.like_count || 0,
+      favorite_count: w.favorite_count || 0,
+      comment_count: w.comment_count || 0,
+      fingerprint_token: w.fingerprint_token || '',
+      downloaded_at: w.created_at,
+      author: {
+        username: w.author_username,
+        display_name: w.author_display_name,
+      },
+    })),
+  });
 });
 
 app.get('/api/my/favorites', requireAuth, (req, res) => {
-  res.json({ favorites: getUserFavorites(req.user!.id) });
+  res.json({
+    favorites: getUserFavorites(req.user!.id).map(w => ({
+      id: w.id,
+      work_id: w.work_id,
+      title: w.title,
+      char_name: w.char_name || '',
+      description: w.description || '',
+      type: w.type,
+      tags: JSON.parse(w.tags || '[]'),
+      cover_url: w.cover_filename ? `${config.baseUrl}/uploads/${w.cover_filename}` : null,
+      card_link: w.card_link || '',
+      file_type: w.file_type || 'json',
+      status: w.status,
+      visibility: w.visibility,
+      download_count: w.download_count || 0,
+      like_count: w.like_count || 0,
+      favorite_count: w.favorite_count || 0,
+      comment_count: w.comment_count || 0,
+      favorited_at: w.created_at,
+      author: {
+        username: w.author_username,
+        display_name: w.author_display_name,
+      },
+    })),
+  });
 });
 
 // ─── 健康检查 ───
