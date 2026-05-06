@@ -28,6 +28,21 @@ function extractToken(req: Request): string | undefined {
   return undefined;
 }
 
+export function getOptionalUser(req: Request): DbUser | undefined {
+  const token = extractToken(req);
+  if (!token) return undefined;
+
+  const session = findSession(token);
+  if (!session || new Date(session.expires_at) < new Date()) return undefined;
+
+  const user = getDb().prepare('SELECT * FROM users WHERE id = ?').get(session.user_id) as DbUser | undefined;
+  if (!user || user.banned) return undefined;
+
+  req.user = user;
+  req.sessionToken = token;
+  return user;
+}
+
 /** 必须登录 */
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   const token = extractToken(req);

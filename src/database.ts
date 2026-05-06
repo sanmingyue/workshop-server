@@ -78,7 +78,28 @@ export function initDatabase(): Database.Database {
       user_id INTEGER UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
       password_plain TEXT DEFAULT '',
+      password_updated_at TEXT DEFAULT '',
       FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      log_date TEXT NOT NULL,
+      user_id INTEGER,
+      actor_username TEXT DEFAULT '',
+      actor_display_name TEXT DEFAULT '',
+      target_user_id INTEGER,
+      category TEXT NOT NULL,
+      action TEXT NOT NULL,
+      entity_type TEXT DEFAULT '',
+      entity_id TEXT DEFAULT '',
+      success INTEGER DEFAULT 1,
+      detail TEXT DEFAULT '{}',
+      ip TEXT DEFAULT '',
+      user_agent TEXT DEFAULT '',
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (target_user_id) REFERENCES users(id)
     );
 
     CREATE INDEX IF NOT EXISTS idx_works_status ON works(status);
@@ -87,6 +108,11 @@ export function initDatabase(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_likes_work ON likes(work_id);
     CREATE INDEX IF NOT EXISTS idx_likes_user ON likes(user_id);
     CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_date_user ON audit_logs(log_date, user_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_target_user ON audit_logs(target_user_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_category ON audit_logs(category);
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at);
   `);
 
   // ─── 数据库迁移：为已有表添加新字段 ───
@@ -103,6 +129,7 @@ export function initDatabase(): Database.Database {
   migrateColumn('works', 'card_link', "TEXT DEFAULT ''");
   migrateColumn('works', 'file_type', "TEXT DEFAULT 'json'");
   migrateColumn('user_passwords', 'password_plain', "TEXT DEFAULT ''");
+  migrateColumn('user_passwords', 'password_updated_at', "TEXT DEFAULT ''");
 
   console.log('[DB] 数据库初始化完成:', dbPath);
   return db;
@@ -141,8 +168,8 @@ export function createUser(discordId: string, username: string, displayName: str
 
 export function updateUserLogin(discordId: string, username: string, displayName: string, avatar: string): void {
   getDb().prepare(
-    'UPDATE users SET discord_username = ?, discord_display_name = ?, discord_avatar = ?, last_login = CURRENT_TIMESTAMP WHERE discord_id = ?',
-  ).run(username, displayName, avatar, discordId);
+    'UPDATE users SET discord_username = ?, discord_display_name = ?, discord_avatar = ?, last_login = ? WHERE discord_id = ?',
+  ).run(username, displayName, avatar, new Date().toISOString(), discordId);
 }
 
 export function isAdmin(user: DbUser): boolean {
@@ -331,19 +358,26 @@ export function getPendingWorks(): WorkWithAuthor[] {
   return getDb().prepare(sql).all() as WorkWithAuthor[];
 }
 
-export function getAllWorksAdmin(status?: string): WorkWithAuthor[] {
-  let where = '';
+export function getAllWorksAdmin(status?: string, type?: string): WorkWithAuthor[] {
+  const where: string[] = [];
   const params: any[] = [];
+
   if (status) {
-    where = 'WHERE w.status = ?';
+    where.push('w.status = ?');
     params.push(status);
   }
+  if (type) {
+    where.push('w.type = ?');
+    params.push(type);
+  }
+
+  const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
   const sql = `
     SELECT w.*, u.discord_username as author_username, u.discord_display_name as author_display_name,
            u.discord_avatar as author_avatar, u.discord_id as author_discord_id
     FROM works w
     JOIN users u ON w.user_id = u.id
-    ${where}
+    ${whereSql}
     ORDER BY w.created_at DESC
   `;
   return getDb().prepare(sql).all(...params) as WorkWithAuthor[];

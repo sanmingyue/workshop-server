@@ -4,7 +4,8 @@ import path from 'path';
 import fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 import { config } from '../config';
-import { requireAuth } from '../auth/middleware';
+import { getOptionalUser, requireAuth } from '../auth/middleware';
+import { recordAuditLog } from '../audit';
 import {
   createWork, getApprovedWorks, getWorkById, getUserWorks,
   updateWork, deleteWork, incrementDownloadCount,
@@ -58,7 +59,7 @@ router.get('/', (req: Request, res: Response) => {
   const token = req.headers.authorization?.replace('Bearer ', '');
   if (token) {
     try {
-      const { findSession, getDb } = require('../database');
+      const { findSession } = require('../database');
       const session = findSession(token);
       if (session) {
         likedIds = getUserLikedWorkIds(session.user_id);
@@ -186,7 +187,6 @@ router.post('/', requireAuth, upload.fields([
   // collection 类型使用上传的 PNG 文件作为内容
   let finalContent = content || '';
   let finalFileType = file_type || 'json';
-  let cardFilename = '';
 
   if (type === 'collection') {
     const cardFile = files?.card_file?.[0];
@@ -195,7 +195,6 @@ router.post('/', requireAuth, upload.fields([
       return;
     }
     // 存储角色卡文件名，content 存储文件路径引用
-    cardFilename = cardFile.filename;
     finalContent = `__card_file__:${cardFile.filename}`;
     finalFileType = 'png';
   } else {
@@ -235,6 +234,21 @@ router.post('/', requireAuth, upload.fields([
     finalFileType,
   );
 
+  recordAuditLog({
+    req,
+    category: 'work',
+    action: 'work_created',
+    entityType: 'work',
+    entityId: workId,
+    detail: {
+      title: title.trim(),
+      type,
+      tags: parsedTags,
+      file_type: finalFileType,
+      has_cover: !!coverFilename,
+    },
+  });
+
   res.status(201).json({ id: workId, message: '作品已提交，等待审核' });
 });
 
@@ -270,6 +284,20 @@ router.put('/:id', requireAuth, upload.single('cover'), (req: Request, res: Resp
   const { getDb } = require('../database');
   getDb().prepare(`UPDATE works SET status = 'pending', reject_reason = '' WHERE id = ?`).run(work.id);
 
+  recordAuditLog({
+    req,
+    category: 'work',
+    action: 'work_updated',
+    entityType: 'work',
+    entityId: work.id,
+    detail: {
+      title: (title || work.title).trim(),
+      type: work.type,
+      status: 'pending',
+      has_new_cover: !!req.file?.filename,
+    },
+  });
+
   res.json({ message: '作品已更新，重新等待审核' });
 });
 
@@ -288,6 +316,14 @@ router.delete('/:id', requireAuth, (req: Request, res: Response) => {
   }
 
   deleteWork(work.id);
+  recordAuditLog({
+    req,
+    category: 'work',
+    action: 'work_deleted',
+    entityType: 'work',
+    entityId: work.id,
+    detail: { title: work.title, type: work.type },
+  });
   res.json({ message: '作品已删除' });
 });
 
@@ -302,6 +338,16 @@ router.post('/:id/like', requireAuth, (req: Request, res: Response) => {
   const liked = toggleLike(req.user!.id, work.id);
   const updatedWork = getWorkById(work.id)!;
 
+  recordAuditLog({
+    req,
+    category: 'work',
+    action: liked ? 'work_liked' : 'work_unliked',
+    entityType: 'work',
+    entityId: work.id,
+    targetUserId: work.user_id,
+    detail: { title: work.title, type: work.type },
+  });
+
   res.json({ liked, like_count: updatedWork.like_count });
 });
 
@@ -314,6 +360,22 @@ router.get('/:id/download', (req: Request, res: Response) => {
   }
 
   incrementDownloadCount(work.id);
+  const actor = getOptionalUser(req);
+  recordAuditLog({
+    req,
+    actor,
+    userId: actor?.id ?? null,
+    targetUserId: work.user_id,
+    category: 'work',
+    action: 'work_downloaded',
+    entityType: 'work',
+    entityId: work.id,
+    detail: {
+      title: work.title,
+      type: work.type,
+      file_type: work.file_type || 'json',
+    },
+  });
 
   // collection 类型（PNG 角色卡）返回文件 URL
   if (work.file_type === 'png' && work.content.startsWith('__card_file__:')) {

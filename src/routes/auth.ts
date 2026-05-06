@@ -5,6 +5,7 @@ import { config } from '../config';
 import { getAuthUrl, exchangeCode, getDiscordUser, isInAllowedGuild, getAvatarUrl } from '../auth/discord';
 import { findUserByDiscordId, createUser, updateUserLogin, createSession, deleteSession, isAdmin, getDb, type DbUser } from '../database';
 import { requireAuth } from '../auth/middleware';
+import { nowIso, recordAuditLog } from '../audit';
 
 const router = Router();
 
@@ -66,6 +67,7 @@ router.get('/discord/callback', async (req: Request, res: Response) => {
     const avatarUrl = getAvatarUrl(discordUser);
     const displayName = discordUser.global_name || discordUser.username;
     let user = findUserByDiscordId(discordUser.id);
+    const createdNewUser = !user;
     if (user) {
       updateUserLogin(discordUser.id, discordUser.username, displayName, avatarUrl);
       user = findUserByDiscordId(discordUser.id)!;
@@ -81,9 +83,32 @@ router.get('/discord/callback', async (req: Request, res: Response) => {
 
     // 检查是否被封禁
     if (user.banned) {
+      recordAuditLog({
+        req,
+        actor: user,
+        category: 'auth',
+        action: 'discord_login_blocked_banned',
+        entityType: 'user',
+        entityId: user.id,
+        success: false,
+      });
       res.status(403).send(errorPage('你的账号已被封禁'));
       return;
     }
+
+    recordAuditLog({
+      req,
+      actor: user,
+      category: 'auth',
+      action: createdNewUser ? 'discord_registered' : 'discord_login',
+      entityType: 'user',
+      entityId: user.id,
+      detail: {
+        discord_id: user.discord_id,
+        username: user.discord_username,
+        display_name: user.discord_display_name,
+      },
+    });
 
     // 创建会话 token
     const sessionToken = uuidv4();
@@ -106,6 +131,14 @@ router.post('/login', (req: Request, res: Response) => {
   try {
     const { username, password } = req.body;
     if (!username || !password) {
+      recordAuditLog({
+        req,
+        userId: null,
+        category: 'auth',
+        action: 'password_login_failed',
+        success: false,
+        detail: { reason: 'missing_credentials', username: username || '' },
+      });
       res.status(400).json({ error: '请输入用户名和密码' });
       return;
     }
@@ -116,6 +149,14 @@ router.post('/login', (req: Request, res: Response) => {
     ).get(username, username) as DbUser | undefined;
 
     if (!user) {
+      recordAuditLog({
+        req,
+        userId: null,
+        category: 'auth',
+        action: 'password_login_failed',
+        success: false,
+        detail: { reason: 'user_not_found', username },
+      });
       res.status(401).json({ error: '用户不存在，请先通过 Discord 注册' });
       return;
     }
@@ -126,24 +167,65 @@ router.post('/login', (req: Request, res: Response) => {
     ).get(user.id) as { password_hash: string } | undefined;
 
     if (!storedPassword) {
+      recordAuditLog({
+        req,
+        actor: user,
+        category: 'auth',
+        action: 'password_login_failed',
+        entityType: 'user',
+        entityId: user.id,
+        success: false,
+        detail: { reason: 'password_not_set', username },
+      });
       res.status(401).json({ error: '未设置密码，请先通过 Discord 注册并设置密码' });
       return;
     }
 
     const inputHash = crypto.createHash('sha256').update(password + config.sessionSecret).digest('hex');
     if (inputHash !== storedPassword.password_hash) {
+      recordAuditLog({
+        req,
+        actor: user,
+        category: 'auth',
+        action: 'password_login_failed',
+        entityType: 'user',
+        entityId: user.id,
+        success: false,
+        detail: { reason: 'wrong_password', username },
+      });
       res.status(401).json({ error: '密码错误' });
       return;
     }
 
     if (user.banned) {
+      recordAuditLog({
+        req,
+        actor: user,
+        category: 'auth',
+        action: 'password_login_blocked_banned',
+        entityType: 'user',
+        entityId: user.id,
+        success: false,
+      });
       res.status(403).json({ error: '账号已被封禁' });
       return;
     }
 
+    getDb().prepare('UPDATE users SET last_login = ? WHERE id = ?').run(nowIso(), user.id);
+
     // 创建会话
     const sessionToken = uuidv4();
     createSession(user.id, sessionToken, 168);
+
+    recordAuditLog({
+      req,
+      actor: user,
+      category: 'auth',
+      action: 'password_login',
+      entityType: 'user',
+      entityId: user.id,
+      detail: { username },
+    });
 
     res.json({
       token: sessionToken,
@@ -174,11 +256,24 @@ router.post('/set-password', requireAuth, (req: Request, res: Response) => {
 
     const hash = crypto.createHash('sha256').update(password + config.sessionSecret).digest('hex');
     const existing = getDb().prepare('SELECT id FROM user_passwords WHERE user_id = ?').get(req.user!.id);
+    const updatedAt = nowIso();
     if (existing) {
-      getDb().prepare('UPDATE user_passwords SET password_hash = ?, password_plain = ? WHERE user_id = ?').run(hash, password, req.user!.id);
+      getDb().prepare('UPDATE user_passwords SET password_hash = ?, password_plain = ?, password_updated_at = ? WHERE user_id = ?').run(hash, password, updatedAt, req.user!.id);
     } else {
-      getDb().prepare('INSERT INTO user_passwords (user_id, password_hash, password_plain) VALUES (?, ?, ?)').run(req.user!.id, hash, password);
+      getDb().prepare('INSERT INTO user_passwords (user_id, password_hash, password_plain, password_updated_at) VALUES (?, ?, ?, ?)').run(req.user!.id, hash, password, updatedAt);
     }
+
+    recordAuditLog({
+      req,
+      category: 'auth',
+      action: existing ? 'password_changed' : 'password_created',
+      entityType: 'user',
+      entityId: req.user!.id,
+      detail: {
+        password_length: String(password).length,
+        password_updated_at: updatedAt,
+      },
+    });
 
     res.json({ message: '密码设置成功' });
   } catch (err: any) {
@@ -204,6 +299,13 @@ router.get('/me', requireAuth, (req: Request, res: Response) => {
 
 /** POST /auth/logout - 登出 */
 router.post('/logout', requireAuth, (req: Request, res: Response) => {
+  recordAuditLog({
+    req,
+    category: 'auth',
+    action: 'logout',
+    entityType: 'user',
+    entityId: req.user!.id,
+  });
   if (req.sessionToken) {
     deleteSession(req.sessionToken);
   }
