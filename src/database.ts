@@ -240,6 +240,7 @@ export function initDatabase(): Database.Database {
       host_name TEXT DEFAULT '',
       character_name TEXT DEFAULT '',
       character_summary TEXT DEFAULT '',
+      character_opening TEXT DEFAULT '',
       character_card_link TEXT DEFAULT '',
       preset_name TEXT DEFAULT '',
       required_assets TEXT DEFAULT '[]',
@@ -338,6 +339,7 @@ export function initDatabase(): Database.Database {
   migrateColumn('downloads', 'fingerprint_version', "TEXT DEFAULT 'v1'");
   migrateColumn('downloads', 'file_token', "TEXT DEFAULT ''");
   migrateColumn('audit_logs', 'action_label', "TEXT DEFAULT ''");
+  migrateColumn('online_rooms', 'character_opening', "TEXT DEFAULT ''");
 
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_works_status ON works(status);

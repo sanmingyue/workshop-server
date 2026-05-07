@@ -6,7 +6,9 @@ import { requireAuth } from '../auth/middleware';
 import { nowIso, recordAuditLog } from '../audit';
 
 const router = Router();
-const STALE_MEMBER_MS = 60_000;
+const STALE_MEMBER_MS = 180_000;
+const MAX_ROOM_MEMBERS = 8;
+const MAX_DIRECTOR_STREAM_LENGTH = 120_000;
 
 type OnlineRoomRow = {
   id: string;
@@ -19,6 +21,7 @@ type OnlineRoomRow = {
   host_name: string;
   character_name: string;
   character_summary: string;
+  character_opening: string;
   character_card_link: string;
   preset_name: string;
   required_assets: string;
@@ -109,29 +112,74 @@ function closeRoomData(room: Pick<OnlineRoomRow, 'id' | 'erase_on_close'>, close
   getDb().prepare("UPDATE online_room_members SET status = 'left', last_seen_at = ? WHERE room_id = ?").run(closedAt, room.id);
 }
 
+function promoteNextHost(roomId: string, now: string): void {
+  const nextHost = getDb().prepare(`
+    SELECT user_id, display_name
+    FROM online_room_members
+    WHERE room_id = ? AND status = 'joined'
+    ORDER BY joined_at ASC
+    LIMIT 1
+  `).get(roomId) as { user_id: number; display_name: string } | undefined;
+
+  if (!nextHost) return;
+
+  getDb().prepare(`
+    UPDATE online_room_members
+    SET role = CASE WHEN user_id = ? THEN 'host' ELSE 'player' END
+    WHERE room_id = ?
+  `).run(nextHost.user_id, roomId);
+  getDb().prepare(`
+    UPDATE online_rooms
+    SET host_user_id = ?, host_name = ?, updated_at = ?
+    WHERE id = ?
+  `).run(nextHost.user_id, nextHost.display_name, now, roomId);
+}
+
+function reconcileOpenRooms(now: string): void {
+  const emptyRooms = getDb().prepare(`
+    SELECT r.id, r.erase_on_close
+    FROM online_rooms r
+    WHERE r.status = 'open'
+      AND NOT EXISTS (
+        SELECT 1 FROM online_room_members m
+        WHERE m.room_id = r.id AND m.status = 'joined'
+      )
+  `).all() as Pick<OnlineRoomRow, 'id' | 'erase_on_close'>[];
+
+  for (const room of emptyRooms) {
+    closeRoomData(room, now);
+  }
+
+  const roomsNeedingHost = getDb().prepare(`
+    SELECT r.id
+    FROM online_rooms r
+    WHERE r.status = 'open'
+      AND EXISTS (
+        SELECT 1 FROM online_room_members m
+        WHERE m.room_id = r.id AND m.status = 'joined'
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM online_room_members m
+        WHERE m.room_id = r.id AND m.status = 'joined' AND m.role = 'host'
+      )
+  `).all() as { id: string }[];
+
+  for (const room of roomsNeedingHost) {
+    promoteNextHost(room.id, now);
+  }
+}
+
 function cleanupStaleRooms(): void {
   const cutoff = new Date(Date.now() - STALE_MEMBER_MS).toISOString();
   const now = nowIso();
   const tx = getDb().transaction(() => {
     getDb().prepare(`
       UPDATE online_room_members
-      SET status = 'left', last_seen_at = ?
+      SET status = 'left', role = 'player', last_seen_at = ?
       WHERE status = 'joined' AND last_seen_at < ?
     `).run(now, cutoff);
 
-    const emptyRooms = getDb().prepare(`
-      SELECT r.id, r.erase_on_close
-      FROM online_rooms r
-      WHERE r.status = 'open'
-        AND NOT EXISTS (
-          SELECT 1 FROM online_room_members m
-          WHERE m.room_id = r.id AND m.status = 'joined'
-        )
-    `).all() as Pick<OnlineRoomRow, 'id' | 'erase_on_close'>[];
-
-    for (const room of emptyRooms) {
-      closeRoomData(room, now);
-    }
+    reconcileOpenRooms(now);
   });
   tx();
 }
@@ -146,6 +194,7 @@ function serializeRoom(room: OnlineRoomRow): Record<string, unknown> {
     host_name: room.host_name,
     character_name: room.character_name,
     character_summary: room.character_summary,
+    character_opening: room.character_opening,
     character_card_link: room.character_card_link,
     preset_name: room.preset_name,
     required_assets: parseJsonArray(room.required_assets),
@@ -213,6 +262,7 @@ function touchMember(roomId: string, user: DbUser): void {
       display_name = excluded.display_name,
       avatar = excluded.avatar,
       status = 'joined',
+      joined_at = CASE WHEN status = 'joined' THEN joined_at ELSE excluded.joined_at END,
       last_seen_at = excluded.last_seen_at
   `).run(roomId, user.id, displayName(user), user.discord_avatar || '', now, now);
 }
@@ -307,6 +357,7 @@ router.post('/rooms', (req: Request, res: Response) => {
     password,
     character_name,
     character_summary,
+    character_opening,
     character_card_link,
     preset_name,
     required_assets,
@@ -337,7 +388,7 @@ router.post('/rooms', (req: Request, res: Response) => {
   getDb().prepare(`
     INSERT INTO online_rooms (
       id, title, visibility, password_hash, password_salt, status, host_user_id, host_name,
-      character_name, character_summary, character_card_link, preset_name, required_assets,
+      character_name, character_summary, character_opening, character_card_link, preset_name, required_assets,
       per_player_words, candidate_timeout_seconds, erase_on_close, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
@@ -350,10 +401,11 @@ router.post('/rooms', (req: Request, res: Response) => {
     hostName,
     String(character_name || '').slice(0, 120),
     String(character_summary || '').slice(0, 2000),
+    String(character_opening || '').slice(0, 4000),
     String(character_card_link || '').slice(0, 800),
     String(preset_name || '').slice(0, 120),
     JSON.stringify(safeAssets),
-    Math.max(300, Math.min(3000, Number(per_player_words) || 1000)),
+    Math.max(300, Math.min(1000, Number(per_player_words) || 1000)),
     Math.max(30, Math.min(600, Number(candidate_timeout_seconds) || 120)),
     erase_on_close === false ? 0 : 1,
     now,
@@ -390,6 +442,18 @@ router.post('/rooms/:roomId/join', (req: Request, res: Response) => {
     res.status(403).json({ error: '房间密码错误' });
     return;
   }
+  const existingMember = getMember(room.id, req.user!.id);
+  if (!existingMember || existingMember.status !== 'joined') {
+    const memberCount = getDb().prepare(`
+      SELECT COUNT(*) as count
+      FROM online_room_members
+      WHERE room_id = ? AND status = 'joined'
+    `).get(room.id) as { count: number };
+    if (memberCount.count >= MAX_ROOM_MEMBERS) {
+      res.status(409).json({ error: `房间最多 ${MAX_ROOM_MEMBERS} 人` });
+      return;
+    }
+  }
 
   touchMember(room.id, req.user!);
   getDb().prepare('UPDATE online_rooms SET updated_at = ? WHERE id = ?').run(nowIso(), room.id);
@@ -418,10 +482,11 @@ router.post('/rooms/:roomId/leave', (req: Request, res: Response) => {
   const now = nowIso();
   getDb().prepare(`
     UPDATE online_room_members
-    SET status = 'left', last_seen_at = ?
+    SET status = 'left', role = 'player', last_seen_at = ?
     WHERE room_id = ? AND user_id = ?
   `).run(now, room.id, req.user!.id);
-  cleanupStaleRooms();
+  const tx = getDb().transaction(() => reconcileOpenRooms(now));
+  tx();
 
   res.json({ ok: true });
 });
@@ -490,7 +555,7 @@ router.post('/rooms/:roomId/rounds', (req: Request, res: Response) => {
 
 router.post('/rounds/:roundId/input', (req: Request, res: Response) => {
   const round = getDb().prepare('SELECT * FROM online_rounds WHERE id = ?').get(req.params.roundId) as OnlineRoundRow | undefined;
-  if (!round || !['collecting', 'integrating'].includes(round.status)) {
+  if (!round || round.status !== 'collecting') {
     res.status(404).json({ error: '当前轮次不存在或已结束' });
     return;
   }
@@ -555,6 +620,26 @@ router.post('/rounds/:roundId/candidate', (req: Request, res: Response) => {
     WHERE round_id = ? AND user_id = ?
   `).run(candidateReply, now, round.id, req.user!.id);
 
+  getDb().prepare('UPDATE online_rooms SET updated_at = ? WHERE id = ?').run(now, round.room_id);
+  res.json({ ok: true });
+});
+
+router.post('/rounds/:roundId/stream', (req: Request, res: Response) => {
+  const round = getDb().prepare('SELECT * FROM online_rounds WHERE id = ?').get(req.params.roundId) as OnlineRoundRow | undefined;
+  if (!round || !['collecting', 'integrating'].includes(round.status)) {
+    res.status(404).json({ error: '当前轮次不存在或已结束' });
+    return;
+  }
+  const room = requireHost(req, res, round.room_id);
+  if (!room) return;
+
+  const assistantMessage = String(req.body?.assistant_message || '').slice(0, MAX_DIRECTOR_STREAM_LENGTH);
+  const now = nowIso();
+  getDb().prepare(`
+    UPDATE online_rounds
+    SET status = 'integrating', assistant_message = ?
+    WHERE id = ?
+  `).run(assistantMessage, round.id);
   getDb().prepare('UPDATE online_rooms SET updated_at = ? WHERE id = ?').run(now, round.room_id);
   res.json({ ok: true });
 });

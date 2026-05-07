@@ -36,7 +36,7 @@ app.use('/api', apiLimiter);
 
 const onlineLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 300,
+  max: 2400,
   message: { error: '联机请求过于频繁，请稍后再试' },
 });
 
