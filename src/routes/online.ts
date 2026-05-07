@@ -6,6 +6,7 @@ import { requireAuth } from '../auth/middleware';
 import { nowIso, recordAuditLog } from '../audit';
 
 const router = Router();
+const STALE_MEMBER_MS = 60_000;
 
 type OnlineRoomRow = {
   id: string;
@@ -94,6 +95,47 @@ function getRoom(roomId: string): OnlineRoomRow | undefined {
   `).get(roomId) as OnlineRoomRow | undefined;
 }
 
+function closeRoomData(room: Pick<OnlineRoomRow, 'id' | 'erase_on_close'>, closedAt: string): void {
+  if (room.erase_on_close) {
+    const rounds = getDb().prepare('SELECT id FROM online_rounds WHERE room_id = ?').all(room.id) as { id: number }[];
+    for (const round of rounds) {
+      getDb().prepare("UPDATE online_round_inputs SET player_message = '', candidate_reply = '' WHERE round_id = ?").run(round.id);
+    }
+    getDb().prepare("UPDATE online_rounds SET user_message = '', assistant_message = '' WHERE room_id = ?").run(room.id);
+    getDb().prepare('DELETE FROM online_room_chat_messages WHERE room_id = ?').run(room.id);
+  }
+
+  getDb().prepare("UPDATE online_rooms SET status = 'closed', closed_at = ?, updated_at = ? WHERE id = ?").run(closedAt, closedAt, room.id);
+  getDb().prepare("UPDATE online_room_members SET status = 'left', last_seen_at = ? WHERE room_id = ?").run(closedAt, room.id);
+}
+
+function cleanupStaleRooms(): void {
+  const cutoff = new Date(Date.now() - STALE_MEMBER_MS).toISOString();
+  const now = nowIso();
+  const tx = getDb().transaction(() => {
+    getDb().prepare(`
+      UPDATE online_room_members
+      SET status = 'left', last_seen_at = ?
+      WHERE status = 'joined' AND last_seen_at < ?
+    `).run(now, cutoff);
+
+    const emptyRooms = getDb().prepare(`
+      SELECT r.id, r.erase_on_close
+      FROM online_rooms r
+      WHERE r.status = 'open'
+        AND NOT EXISTS (
+          SELECT 1 FROM online_room_members m
+          WHERE m.room_id = r.id AND m.status = 'joined'
+        )
+    `).all() as Pick<OnlineRoomRow, 'id' | 'erase_on_close'>[];
+
+    for (const room of emptyRooms) {
+      closeRoomData(room, now);
+    }
+  });
+  tx();
+}
+
 function serializeRoom(room: OnlineRoomRow): Record<string, unknown> {
   return {
     id: room.id,
@@ -125,6 +167,7 @@ function paramValue(value: string | string[] | undefined): string {
 }
 
 function requireRoomMemberById(req: Request, res: Response, roomId: string): OnlineRoomRow | undefined {
+  cleanupStaleRooms();
   const room = getRoom(roomId);
   if (!room || room.status === 'closed') {
     res.status(404).json({ error: '房间不存在或已关闭' });
@@ -146,6 +189,7 @@ function requireRoomMember(req: Request, res: Response): OnlineRoomRow | undefin
 }
 
 function requireHost(req: Request, res: Response, roomId: string): OnlineRoomRow | undefined {
+  cleanupStaleRooms();
   const room = getRoom(roomId);
   if (!room || room.status === 'closed') {
     res.status(404).json({ error: '房间不存在或已关闭' });
@@ -241,6 +285,7 @@ function roomState(req: Request, room: OnlineRoomRow): Record<string, unknown> {
 router.use(requireAuth);
 
 router.get('/rooms', (req: Request, res: Response) => {
+  cleanupStaleRooms();
   const rooms = getDb().prepare(`
     SELECT r.*, (
       SELECT COUNT(*) FROM online_room_members m
@@ -335,6 +380,7 @@ router.post('/rooms', (req: Request, res: Response) => {
 });
 
 router.post('/rooms/:roomId/join', (req: Request, res: Response) => {
+  cleanupStaleRooms();
   const room = getRoom(paramValue(req.params.roomId));
   if (!room || room.status === 'closed') {
     res.status(404).json({ error: '房间不存在或已关闭' });
@@ -359,6 +405,25 @@ router.post('/rooms/:roomId/join', (req: Request, res: Response) => {
   });
 
   res.json({ room: serializeRoom(getRoom(room.id)!) });
+});
+
+router.post('/rooms/:roomId/leave', (req: Request, res: Response) => {
+  cleanupStaleRooms();
+  const room = getRoom(paramValue(req.params.roomId));
+  if (!room || room.status === 'closed') {
+    res.json({ ok: true });
+    return;
+  }
+
+  const now = nowIso();
+  getDb().prepare(`
+    UPDATE online_room_members
+    SET status = 'left', last_seen_at = ?
+    WHERE room_id = ? AND user_id = ?
+  `).run(now, room.id, req.user!.id);
+  cleanupStaleRooms();
+
+  res.json({ ok: true });
 });
 
 router.get('/rooms/:roomId', (req: Request, res: Response) => {
@@ -537,16 +602,7 @@ router.post('/rooms/:roomId/close', (req: Request, res: Response) => {
 
   const tx = getDb().transaction(() => {
     const now = nowIso();
-    if (room.erase_on_close) {
-      const rounds = getDb().prepare('SELECT id FROM online_rounds WHERE room_id = ?').all(room.id) as { id: number }[];
-      for (const round of rounds) {
-        getDb().prepare("UPDATE online_round_inputs SET player_message = '', candidate_reply = '' WHERE round_id = ?").run(round.id);
-      }
-      getDb().prepare("UPDATE online_rounds SET user_message = '', assistant_message = '' WHERE room_id = ?").run(room.id);
-      getDb().prepare('DELETE FROM online_room_chat_messages WHERE room_id = ?').run(room.id);
-    }
-    getDb().prepare("UPDATE online_rooms SET status = 'closed', closed_at = ?, updated_at = ? WHERE id = ?").run(now, now, room.id);
-    getDb().prepare("UPDATE online_room_members SET status = 'left', last_seen_at = ? WHERE room_id = ?").run(now, room.id);
+    closeRoomData(room, now);
   });
   tx();
 
