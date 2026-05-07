@@ -228,6 +228,83 @@ export function initDatabase(): Database.Database {
       FOREIGN KEY (user_id) REFERENCES users(id),
       FOREIGN KEY (target_user_id) REFERENCES users(id)
     );
+
+    CREATE TABLE IF NOT EXISTS online_rooms (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      visibility TEXT NOT NULL,
+      password_hash TEXT DEFAULT '',
+      password_salt TEXT DEFAULT '',
+      status TEXT DEFAULT 'open',
+      host_user_id INTEGER NOT NULL,
+      host_name TEXT DEFAULT '',
+      character_name TEXT DEFAULT '',
+      character_summary TEXT DEFAULT '',
+      character_card_link TEXT DEFAULT '',
+      preset_name TEXT DEFAULT '',
+      required_assets TEXT DEFAULT '[]',
+      per_player_words INTEGER DEFAULT 1000,
+      candidate_timeout_seconds INTEGER DEFAULT 120,
+      erase_on_close INTEGER DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      closed_at TEXT DEFAULT '',
+      FOREIGN KEY (host_user_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS online_room_members (
+      room_id TEXT NOT NULL,
+      user_id INTEGER NOT NULL,
+      display_name TEXT DEFAULT '',
+      avatar TEXT DEFAULT '',
+      role TEXT DEFAULT 'player',
+      status TEXT DEFAULT 'joined',
+      joined_at TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL,
+      PRIMARY KEY (room_id, user_id),
+      FOREIGN KEY (room_id) REFERENCES online_rooms(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS online_room_chat_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      room_id TEXT NOT NULL,
+      user_id INTEGER NOT NULL,
+      display_name TEXT DEFAULT '',
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (room_id) REFERENCES online_rooms(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS online_rounds (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      room_id TEXT NOT NULL,
+      round_no INTEGER NOT NULL,
+      status TEXT DEFAULT 'collecting',
+      deadline_at TEXT DEFAULT '',
+      user_message TEXT DEFAULT '',
+      assistant_message TEXT DEFAULT '',
+      created_at TEXT NOT NULL,
+      finalized_at TEXT DEFAULT '',
+      UNIQUE(room_id, round_no),
+      FOREIGN KEY (room_id) REFERENCES online_rooms(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS online_round_inputs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      round_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      display_name TEXT DEFAULT '',
+      player_message TEXT DEFAULT '',
+      candidate_reply TEXT DEFAULT '',
+      status TEXT DEFAULT 'submitted',
+      submitted_at TEXT NOT NULL,
+      candidate_at TEXT DEFAULT '',
+      UNIQUE(round_id, user_id),
+      FOREIGN KEY (round_id) REFERENCES online_rounds(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
   `);
 
   const migrateColumn = (table: string, column: string, type: string) => {
@@ -302,6 +379,13 @@ export function initDatabase(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
     CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at);
     CREATE INDEX IF NOT EXISTS idx_audit_logs_entity_created ON audit_logs(entity_type, entity_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_online_rooms_status_visibility ON online_rooms(status, visibility, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_online_rooms_host ON online_rooms(host_user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_online_members_user ON online_room_members(user_id, status);
+    CREATE INDEX IF NOT EXISTS idx_online_members_room_seen ON online_room_members(room_id, last_seen_at);
+    CREATE INDEX IF NOT EXISTS idx_online_chat_room_created ON online_room_chat_messages(room_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_online_rounds_room_status ON online_rounds(room_id, status, round_no);
+    CREATE INDEX IF NOT EXISTS idx_online_inputs_round ON online_round_inputs(round_id, status);
   `);
 
   backfillWorkVersions();

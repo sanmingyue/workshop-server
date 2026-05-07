@@ -8,6 +8,7 @@ import { requireAuth } from './auth/middleware';
 import authRoutes from './routes/auth';
 import worksRoutes from './routes/works';
 import adminRoutes from './routes/admin';
+import onlineRoutes from './routes/online';
 
 // ─── 初始化 ───
 const app = express();
@@ -54,6 +55,7 @@ app.use('/uploads', express.static(uploadsDir, {
 // ─── 路由 ───
 app.use('/auth', authRoutes);
 app.use('/api/works', worksRoutes);
+app.use('/api/online', onlineRoutes);
 app.use('/admin', adminRoutes);
 
 // 「我的作品」单独挂载（避免与 /api/works/:id 冲突）
