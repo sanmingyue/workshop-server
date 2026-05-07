@@ -22,6 +22,7 @@ type OnlineRoomRow = {
   character_name: string;
   character_summary: string;
   character_opening: string;
+  custom_opening: string;
   character_card_link: string;
   preset_name: string;
   required_assets: string;
@@ -195,6 +196,7 @@ function serializeRoom(room: OnlineRoomRow): Record<string, unknown> {
     character_name: room.character_name,
     character_summary: room.character_summary,
     character_opening: room.character_opening,
+    custom_opening: room.custom_opening,
     character_card_link: room.character_card_link,
     preset_name: room.preset_name,
     required_assets: parseJsonArray(room.required_assets),
@@ -358,6 +360,7 @@ router.post('/rooms', (req: Request, res: Response) => {
     character_name,
     character_summary,
     character_opening,
+    custom_opening,
     character_card_link,
     preset_name,
     required_assets,
@@ -388,9 +391,9 @@ router.post('/rooms', (req: Request, res: Response) => {
   getDb().prepare(`
     INSERT INTO online_rooms (
       id, title, visibility, password_hash, password_salt, status, host_user_id, host_name,
-      character_name, character_summary, character_opening, character_card_link, preset_name, required_assets,
+      character_name, character_summary, character_opening, custom_opening, character_card_link, preset_name, required_assets,
       per_player_words, candidate_timeout_seconds, erase_on_close, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     String(title || '联机房间').slice(0, 80),
@@ -402,6 +405,7 @@ router.post('/rooms', (req: Request, res: Response) => {
     String(character_name || '').slice(0, 120),
     String(character_summary || '').slice(0, 2000),
     String(character_opening || '').slice(0, 4000),
+    String(custom_opening || '').slice(0, 4000),
     String(character_card_link || '').slice(0, 800),
     String(preset_name || '').slice(0, 120),
     JSON.stringify(safeAssets),
