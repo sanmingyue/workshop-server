@@ -29,9 +29,16 @@ app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 const apiLimiter = rateLimit({
   windowMs: 60 * 1000, // 1分钟
   max: 60, // 每分钟最多60次
+  skip: req => req.path.startsWith('/online'),
   message: { error: '请求过于频繁，请稍后再试' },
 });
 app.use('/api', apiLimiter);
+
+const onlineLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 300,
+  message: { error: '联机请求过于频繁，请稍后再试' },
+});
 
 const uploadLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -55,7 +62,7 @@ app.use('/uploads', express.static(uploadsDir, {
 // ─── 路由 ───
 app.use('/auth', authRoutes);
 app.use('/api/works', worksRoutes);
-app.use('/api/online', onlineRoutes);
+app.use('/api/online', onlineLimiter, onlineRoutes);
 app.use('/admin', adminRoutes);
 
 // 「我的作品」单独挂载（避免与 /api/works/:id 冲突）
