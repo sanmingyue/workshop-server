@@ -486,26 +486,68 @@ router.put('/:id/children', requireAuth, (req: Request, res: Response) => {
   }
 });
 
-router.put('/:id', requireAuth, upload.single('cover'), (req: Request, res: Response) => {
+router.put('/:id', requireAuth, upload.fields([
+  { name: 'cover', maxCount: 1 },
+  { name: 'card_file', maxCount: 1 },
+]), (req: Request, res: Response) => {
   const work = getWorkById(parseInt(req.params.id as string));
   if (!work || work.user_id !== req.user!.id) { res.status(404).json({ error: '作品不存在或无权修改' }); return; }
   if (work.visibility === 'author_deleted') { res.status(400).json({ error: '已删除作品不能继续更新' }); return; }
 
   const { title, description, content, tags, char_name, card_link, file_type } = req.body;
+  const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
   const parsedTags = tags ? parseTags(tags) : JSON.parse(work.tags || '[]');
   const nextCharName = char_name !== undefined ? String(char_name || '').trim() : work.char_name || '';
   if ((work.type === 'persona' || work.type === 'card_addon') && !nextCharName) { res.status(400).json({ error: '人设/OC与角色卡二创必须填写角色名' }); return; }
   const nextCardLink = card_link !== undefined ? String(card_link || '').trim() : work.card_link;
   if (work.type === 'card_addon' && !nextCardLink) { res.status(400).json({ error: '角色卡二创必须填写角色卡链接' }); return; }
+  if (work.type === 'character' && card_link !== undefined && !nextCardLink) { res.status(400).json({ error: '角色卡类型必须填写角色卡链接' }); return; }
+
+  // 处理资源文件替换
+  const cardFile = files?.card_file?.[0];
+  let nextContent = work.type === 'collection' ? work.content : (content || work.content);
+  let nextFileType = file_type !== undefined ? String(file_type || work.file_type) : work.file_type;
+
+  if (cardFile) {
+    if (work.type === 'character') {
+      // 角色卡：存为文件指针
+      const ext = path.extname(cardFile.originalname).toLowerCase();
+      nextFileType = ext === '.png' ? 'png' : 'json';
+      nextContent = `__card_file__:${cardFile.filename}`;
+    } else if (work.type === 'regex' || work.type === 'worldbook') {
+      // 正则/世界书：读取文件内容
+      const fileContent = fs.readFileSync(cardFile.path, 'utf8');
+      if (Buffer.byteLength(fileContent, 'utf8') > config.maxContentSize) {
+        try { fs.unlinkSync(cardFile.path); } catch { /* ignore */ }
+        res.status(400).json({ error: '文件内容过大，最大 1MB' });
+        return;
+      }
+      nextContent = fileContent;
+      nextFileType = 'json';
+      try { fs.unlinkSync(cardFile.path); } catch { /* ignore */ }
+    } else if (work.type === 'card_addon') {
+      // 角色卡二创非 persona 子类型：读取文件
+      const fileContent = fs.readFileSync(cardFile.path, 'utf8');
+      if (Buffer.byteLength(fileContent, 'utf8') > config.maxContentSize) {
+        try { fs.unlinkSync(cardFile.path); } catch { /* ignore */ }
+        res.status(400).json({ error: '文件内容过大，最大 1MB' });
+        return;
+      }
+      nextContent = fileContent;
+      try { fs.unlinkSync(cardFile.path); } catch { /* ignore */ }
+    }
+  }
+
+  const coverFilename = files?.cover?.[0]?.filename;
   const versionId = createWorkVersion(
     work,
     (title || work.title).trim(),
     (description ?? work.description).trim(),
-    work.type === 'collection' ? work.content : (content || work.content),
+    nextContent,
     parsedTags,
-    req.file?.filename,
+    coverFilename,
     nextCardLink,
-    file_type !== undefined ? String(file_type || work.file_type) : undefined,
+    nextFileType,
     nextCharName,
   );
 
@@ -516,7 +558,7 @@ router.put('/:id', requireAuth, upload.single('cover'), (req: Request, res: Resp
     entityType: 'work_version',
     entityId: versionId,
     targetUserId: work.user_id,
-    detail: { 作品ID: work.id, 作品标题: title || work.title, 类型: work.type, 版本ID: versionId },
+    detail: { 作品ID: work.id, 作品标题: title || work.title, 类型: work.type, 版本ID: versionId, 有新资源文件: !!cardFile, 有新封面: !!coverFilename },
   });
   res.json({ message: work.status === 'approved' ? '作品更新已提交，等待审核；公开版本会先保留' : '作品已更新，重新等待审核', version_id: versionId });
 });
