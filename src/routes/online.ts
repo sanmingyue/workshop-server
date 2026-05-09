@@ -4,11 +4,14 @@ import { config } from '../config';
 import { getDb, type DbUser } from '../database';
 import { requireAuth } from '../auth/middleware';
 import { nowIso, recordAuditLog } from '../audit';
+import { addSSEClient, removeSSEClient, broadcastToRoom, broadcastToRoomAll, closeRoomSSE } from '../sse';
 
 const router = Router();
 const STALE_MEMBER_MS = 180_000;
 const MAX_ROOM_MEMBERS = 8;
 const MAX_DIRECTOR_STREAM_LENGTH = 120_000;
+
+// ─── 类型 ───
 
 type OnlineRoomRow = {
   id: string;
@@ -46,6 +49,8 @@ type OnlineRoundRow = {
   created_at: string;
   finalized_at: string;
 };
+
+// ─── 工具函数 ───
 
 function parseJsonArray(value: string): string[] {
   try {
@@ -149,6 +154,7 @@ function reconcileOpenRooms(now: string): void {
 
   for (const room of emptyRooms) {
     closeRoomData(room, now);
+    closeRoomSSE(room.id);
   }
 
   const roomsNeedingHost = getDb().prepare(`
@@ -167,6 +173,8 @@ function reconcileOpenRooms(now: string): void {
 
   for (const room of roomsNeedingHost) {
     promoteNextHost(room.id, now);
+    // 广播房主变更
+    broadcastMemberUpdate(room.id);
   }
 }
 
@@ -293,12 +301,7 @@ function serializeRound(round: OnlineRoundRow): Record<string, unknown> {
 
 function roomState(req: Request, room: OnlineRoomRow): Record<string, unknown> {
   const me = getMember(room.id, req.user!.id);
-  const members = getDb().prepare(`
-    SELECT user_id, display_name, avatar, role, status, last_seen_at
-    FROM online_room_members
-    WHERE room_id = ? AND status = 'joined'
-    ORDER BY role = 'host' DESC, joined_at ASC
-  `).all(room.id);
+  const members = getMembers(room.id);
 
   const chatMessages = getDb().prepare(`
     SELECT id, room_id, user_id, display_name, content, created_at
@@ -334,7 +337,78 @@ function roomState(req: Request, room: OnlineRoomRow): Record<string, unknown> {
   };
 }
 
+// ─── SSE 广播辅助函数 ───
+
+/** 获取房间当前成员列表 */
+function getMembers(roomId: string): any[] {
+  return getDb().prepare(`
+    SELECT user_id, display_name, avatar, role, status, last_seen_at
+    FROM online_room_members
+    WHERE room_id = ? AND status = 'joined'
+    ORDER BY role = 'host' DESC, joined_at ASC
+  `).all(roomId);
+}
+
+/** 广播成员列表更新 */
+function broadcastMemberUpdate(roomId: string): void {
+  const room = getRoom(roomId);
+  if (!room) return;
+  broadcastToRoomAll(roomId, 'member_update', {
+    members: getMembers(roomId),
+    room: serializeRoom(room),
+  });
+}
+
+/** 广播回合状态更新 */
+function broadcastRoundUpdate(roomId: string, round: OnlineRoundRow): void {
+  broadcastToRoomAll(roomId, 'round_update', serializeRound(round));
+}
+
+// ─── 路由 ───
+
 router.use(requireAuth);
+
+// ─── SSE 事件流 ───
+
+router.get('/rooms/:roomId/events', (req: Request, res: Response) => {
+  cleanupStaleRooms();
+  const roomId = paramValue(req.params.roomId);
+  const room = getRoom(roomId);
+  if (!room || room.status === 'closed') {
+    res.status(404).json({ error: '房间不存在或已关闭' });
+    return;
+  }
+
+  const member = getMember(room.id, req.user!.id);
+  if (!member || member.status !== 'joined') {
+    res.status(403).json({ error: '你还没有加入这个房间' });
+    return;
+  }
+
+  // 更新心跳
+  touchMember(room.id, req.user!);
+
+  // 设置 SSE 响应头
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no'); // nginx 兼容
+  res.flushHeaders();
+
+  // 注册 SSE 客户端
+  const client = addSSEClient(room.id, req.user!.id, res);
+
+  // 立即推送一次完整状态
+  const fullState = roomState(req, getRoom(room.id)!);
+  res.write(`event: full_state\ndata: ${JSON.stringify(fullState)}\n\n`);
+
+  // 连接断开时清理
+  req.on('close', () => {
+    removeSSEClient(room.id, client);
+  });
+});
+
+// ─── 房间列表 ───
 
 router.get('/rooms', (req: Request, res: Response) => {
   cleanupStaleRooms();
@@ -351,6 +425,8 @@ router.get('/rooms', (req: Request, res: Response) => {
 
   res.json({ rooms: rooms.map(serializeRoom) });
 });
+
+// ─── 创建房间 ───
 
 router.post('/rooms', (req: Request, res: Response) => {
   const {
@@ -435,6 +511,8 @@ router.post('/rooms', (req: Request, res: Response) => {
   res.json({ room: serializeRoom(getRoom(id)!) });
 });
 
+// ─── 加入房间 ───
+
 router.post('/rooms/:roomId/join', (req: Request, res: Response) => {
   cleanupStaleRooms();
   const room = getRoom(paramValue(req.params.roomId));
@@ -472,8 +550,13 @@ router.post('/rooms/:roomId/join', (req: Request, res: Response) => {
     detail: { 房间名: room.title },
   });
 
+  // SSE 广播：新成员加入
+  broadcastMemberUpdate(room.id);
+
   res.json({ room: serializeRoom(getRoom(room.id)!) });
 });
+
+// ─── 离开房间 ───
 
 router.post('/rooms/:roomId/leave', (req: Request, res: Response) => {
   cleanupStaleRooms();
@@ -492,8 +575,16 @@ router.post('/rooms/:roomId/leave', (req: Request, res: Response) => {
   const tx = getDb().transaction(() => reconcileOpenRooms(now));
   tx();
 
+  // SSE 广播：成员离开（如果房间还在则广播，否则 reconcile 已经 closeRoomSSE 了）
+  const updatedRoom = getRoom(room.id);
+  if (updatedRoom && updatedRoom.status === 'open') {
+    broadcastMemberUpdate(room.id);
+  }
+
   res.json({ ok: true });
 });
+
+// ─── 获取房间状态 ───
 
 router.get('/rooms/:roomId', (req: Request, res: Response) => {
   const room = requireRoomMember(req, res);
@@ -501,11 +592,15 @@ router.get('/rooms/:roomId', (req: Request, res: Response) => {
   res.json(roomState(req, getRoom(room.id)!));
 });
 
+// ─── 心跳 ───
+
 router.post('/rooms/:roomId/heartbeat', (req: Request, res: Response) => {
   const room = requireRoomMember(req, res);
   if (!room) return;
   res.json({ ok: true });
 });
+
+// ─── 房间聊天 ───
 
 router.post('/rooms/:roomId/chat', (req: Request, res: Response) => {
   const room = requireRoomMember(req, res);
@@ -521,14 +616,28 @@ router.post('/rooms/:roomId/chat', (req: Request, res: Response) => {
     return;
   }
 
+  const now = nowIso();
   const result = getDb().prepare(`
     INSERT INTO online_room_chat_messages (room_id, user_id, display_name, content, created_at)
     VALUES (?, ?, ?, ?, ?)
-  `).run(room.id, req.user!.id, displayName(req.user!), content, nowIso());
+  `).run(room.id, req.user!.id, displayName(req.user!), content, now);
 
-  getDb().prepare('UPDATE online_rooms SET updated_at = ? WHERE id = ?').run(nowIso(), room.id);
+  getDb().prepare('UPDATE online_rooms SET updated_at = ? WHERE id = ?').run(now, room.id);
+
+  // SSE 广播：聊天消息
+  broadcastToRoomAll(room.id, 'chat_message', {
+    id: result.lastInsertRowid,
+    room_id: room.id,
+    user_id: req.user!.id,
+    display_name: displayName(req.user!),
+    content,
+    created_at: now,
+  });
+
   res.json({ id: result.lastInsertRowid });
 });
+
+// ─── 开始新一轮 ───
 
 router.post('/rooms/:roomId/rounds', (req: Request, res: Response) => {
   const room = requireHost(req, res, paramValue(req.params.roomId));
@@ -554,8 +663,15 @@ router.post('/rooms/:roomId/rounds', (req: Request, res: Response) => {
   `).run(room.id, roundNo, deadline, now);
 
   getDb().prepare('UPDATE online_rooms SET updated_at = ? WHERE id = ?').run(now, room.id);
+
+  // SSE 广播：新一轮开始
+  const newRound = getDb().prepare('SELECT * FROM online_rounds WHERE id = ?').get(result.lastInsertRowid) as OnlineRoundRow;
+  broadcastToRoomAll(room.id, 'round_started', serializeRound(newRound));
+
   res.json({ round_id: result.lastInsertRowid });
 });
+
+// ─── 提交本轮发言 ───
 
 router.post('/rounds/:roundId/input', (req: Request, res: Response) => {
   const round = getDb().prepare('SELECT * FROM online_rounds WHERE id = ?').get(req.params.roundId) as OnlineRoundRow | undefined;
@@ -589,8 +705,21 @@ router.post('/rounds/:roundId/input', (req: Request, res: Response) => {
   `).run(round.id, req.user!.id, displayName(req.user!), playerMessage, now);
 
   getDb().prepare('UPDATE online_rooms SET updated_at = ? WHERE id = ?').run(now, round.room_id);
+
+  // SSE 广播：玩家提交发言
+  broadcastToRoomAll(round.room_id, 'round_input', {
+    round_id: round.id,
+    user_id: req.user!.id,
+    display_name: displayName(req.user!),
+    player_message: playerMessage,
+    status: 'submitted',
+    submitted_at: now,
+  });
+
   res.json({ ok: true });
 });
+
+// ─── 提交候选回复 ───
 
 router.post('/rounds/:roundId/candidate', (req: Request, res: Response) => {
   const round = getDb().prepare('SELECT * FROM online_rounds WHERE id = ?').get(req.params.roundId) as OnlineRoundRow | undefined;
@@ -625,8 +754,21 @@ router.post('/rounds/:roundId/candidate', (req: Request, res: Response) => {
   `).run(candidateReply, now, round.id, req.user!.id);
 
   getDb().prepare('UPDATE online_rooms SET updated_at = ? WHERE id = ?').run(now, round.room_id);
+
+  // SSE 广播：候选回复完成
+  broadcastToRoomAll(round.room_id, 'candidate_ready', {
+    round_id: round.id,
+    user_id: req.user!.id,
+    display_name: displayName(req.user!),
+    candidate_reply: candidateReply,
+    status: 'candidate_ready',
+    candidate_at: now,
+  });
+
   res.json({ ok: true });
 });
+
+// ─── 导演流式输出 ───
 
 router.post('/rounds/:roundId/stream', (req: Request, res: Response) => {
   const round = getDb().prepare('SELECT * FROM online_rounds WHERE id = ?').get(req.params.roundId) as OnlineRoundRow | undefined;
@@ -645,8 +787,18 @@ router.post('/rounds/:roundId/stream', (req: Request, res: Response) => {
     WHERE id = ?
   `).run(assistantMessage, round.id);
   getDb().prepare('UPDATE online_rooms SET updated_at = ? WHERE id = ?').run(now, round.room_id);
+
+  // SSE 广播：导演流式输出（排除房主自己，因为房主本地已有流）
+  broadcastToRoom(round.room_id, 'director_stream', {
+    round_id: round.id,
+    status: 'integrating',
+    assistant_message: assistantMessage,
+  }, req.user!.id);
+
   res.json({ ok: true });
 });
+
+// ─── 完成整合 ───
 
 router.post('/rounds/:roundId/finalize', (req: Request, res: Response) => {
   const round = getDb().prepare('SELECT * FROM online_rounds WHERE id = ?').get(req.params.roundId) as OnlineRoundRow | undefined;
@@ -682,8 +834,14 @@ router.post('/rounds/:roundId/finalize', (req: Request, res: Response) => {
     detail: { 房间: room.title, 轮次: round.round_no },
   });
 
+  // SSE 广播：轮次完成
+  const finalizedRound = getDb().prepare('SELECT * FROM online_rounds WHERE id = ?').get(round.id) as OnlineRoundRow;
+  broadcastToRoomAll(round.room_id, 'round_finalized', serializeRound(finalizedRound));
+
   res.json({ ok: true });
 });
+
+// ─── 关闭房间 ───
 
 router.post('/rooms/:roomId/close', (req: Request, res: Response) => {
   const room = requireHost(req, res, paramValue(req.params.roomId));
@@ -704,6 +862,9 @@ router.post('/rooms/:roomId/close', (req: Request, res: Response) => {
     entityId: room.id,
     detail: { 房间名: room.title, 清空正文: !!room.erase_on_close },
   });
+
+  // SSE 广播：房间关闭，关闭所有 SSE 连接
+  closeRoomSSE(room.id);
 
   res.json({ ok: true });
 });
