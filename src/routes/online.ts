@@ -7,7 +7,7 @@ import { nowIso, recordAuditLog } from '../audit';
 import { addSSEClient, removeSSEClient, broadcastToRoom, broadcastToRoomAll, closeRoomSSE } from '../sse';
 
 const router = Router();
-const STALE_MEMBER_MS = 180_000;
+const STALE_MEMBER_MS = 600_000; // 10分钟无心跳才判定为掉线（SSE连接本身会保活）
 const MAX_ROOM_MEMBERS = 8;
 const MAX_DIRECTOR_STREAM_LENGTH = 120_000;
 

@@ -1,4 +1,5 @@
 import { Response } from 'express';
+import { getDb } from './database';
 
 /**
  * SSE 事件总线 —— 管理房间内的 SSE 连接，提供房间广播能力
@@ -6,6 +7,8 @@ import { Response } from 'express';
  * 内存中维护 roomId -> Set<Response> 的映射。
  * 每个写操作（聊天、提交发言、候选完成等）完成后，
  * 调用 broadcastToRoom() 将增量事件推送给房间内所有连接。
+ *
+ * SSE 心跳同时更新数据库中的 last_seen_at，确保有 SSE 连接的用户不会被误判为掉线。
  */
 
 interface SSEClient {
@@ -26,10 +29,15 @@ let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 function ensureHeartbeat(): void {
   if (heartbeatTimer) return;
   heartbeatTimer = setInterval(() => {
+    const now = new Date().toISOString();
+    const userIdsToTouch: { roomId: string; userId: number }[] = [];
+
     for (const [roomId, clients] of roomClients.entries()) {
       for (const client of clients) {
         try {
           client.res.write(': heartbeat\n\n');
+          // 收集需要更新心跳的用户（SSE 连接正常 = 用户在线）
+          userIdsToTouch.push({ roomId, userId: client.userId });
         } catch {
           // 写入失败，连接已断开，移除
           clients.delete(client);
@@ -40,6 +48,21 @@ function ensureHeartbeat(): void {
         roomClients.delete(roomId);
       }
     }
+
+    // 批量更新 last_seen_at（SSE 连接在 = 用户在线，不应被踢出）
+    if (userIdsToTouch.length > 0) {
+      try {
+        const stmt = getDb().prepare(
+          `UPDATE online_room_members SET last_seen_at = ? WHERE room_id = ? AND user_id = ? AND status = 'joined'`,
+        );
+        for (const { roomId, userId } of userIdsToTouch) {
+          stmt.run(now, roomId, userId);
+        }
+      } catch {
+        // 数据库可能还没初始化，忽略
+      }
+    }
+
     // 没有任何连接时停止心跳
     if (roomClients.size === 0 && heartbeatTimer) {
       clearInterval(heartbeatTimer);
