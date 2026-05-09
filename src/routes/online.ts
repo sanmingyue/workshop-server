@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+ import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
 import { config } from '../config';
 import { getDb, type DbUser } from '../database';
@@ -30,6 +30,8 @@ type OnlineRoomRow = {
   preset_name: string;
   required_assets: string;
   per_player_words: number;
+  per_player_min_words: number;
+  per_player_max_words: number;
   candidate_timeout_seconds: number;
   erase_on_close: number;
   created_at: string;
@@ -209,6 +211,8 @@ function serializeRoom(room: OnlineRoomRow): Record<string, unknown> {
     preset_name: room.preset_name,
     required_assets: parseJsonArray(room.required_assets),
     per_player_words: room.per_player_words,
+    per_player_min_words: room.per_player_min_words ?? 700,
+    per_player_max_words: room.per_player_max_words ?? 1000,
     candidate_timeout_seconds: room.candidate_timeout_seconds,
     erase_on_close: !!room.erase_on_close,
     member_count: room.member_count || 0,
@@ -262,19 +266,37 @@ function requireHost(req: Request, res: Response, roomId: string): OnlineRoomRow
   return room;
 }
 
-function touchMember(roomId: string, user: DbUser): void {
+function touchMember(roomId: string, user: DbUser, characterName?: string, characterPersona?: string): void {
   const now = nowIso();
-  getDb().prepare(`
-    INSERT INTO online_room_members (
-      room_id, user_id, display_name, avatar, role, status, joined_at, last_seen_at
-    ) VALUES (?, ?, ?, ?, 'player', 'joined', ?, ?)
-    ON CONFLICT(room_id, user_id) DO UPDATE SET
-      display_name = excluded.display_name,
-      avatar = excluded.avatar,
-      status = 'joined',
-      joined_at = CASE WHEN status = 'joined' THEN joined_at ELSE excluded.joined_at END,
-      last_seen_at = excluded.last_seen_at
-  `).run(roomId, user.id, displayName(user), user.discord_avatar || '', now, now);
+  if (characterName !== undefined || characterPersona !== undefined) {
+    // 带角色信息的 upsert（加入时）
+    getDb().prepare(`
+      INSERT INTO online_room_members (
+        room_id, user_id, display_name, avatar, role, status, joined_at, last_seen_at, character_name, character_persona
+      ) VALUES (?, ?, ?, ?, 'player', 'joined', ?, ?, ?, ?)
+      ON CONFLICT(room_id, user_id) DO UPDATE SET
+        display_name = excluded.display_name,
+        avatar = excluded.avatar,
+        status = 'joined',
+        joined_at = CASE WHEN status = 'joined' THEN joined_at ELSE excluded.joined_at END,
+        last_seen_at = excluded.last_seen_at,
+        character_name = excluded.character_name,
+        character_persona = excluded.character_persona
+    `).run(roomId, user.id, displayName(user), user.discord_avatar || '', now, now, characterName || '', characterPersona || '');
+  } else {
+    // 普通心跳 upsert（不覆盖角色信息）
+    getDb().prepare(`
+      INSERT INTO online_room_members (
+        room_id, user_id, display_name, avatar, role, status, joined_at, last_seen_at
+      ) VALUES (?, ?, ?, ?, 'player', 'joined', ?, ?)
+      ON CONFLICT(room_id, user_id) DO UPDATE SET
+        display_name = excluded.display_name,
+        avatar = excluded.avatar,
+        status = 'joined',
+        joined_at = CASE WHEN status = 'joined' THEN joined_at ELSE excluded.joined_at END,
+        last_seen_at = excluded.last_seen_at
+    `).run(roomId, user.id, displayName(user), user.discord_avatar || '', now, now);
+  }
 }
 
 function serializeRound(round: OnlineRoundRow): Record<string, unknown> {
@@ -342,7 +364,7 @@ function roomState(req: Request, room: OnlineRoomRow): Record<string, unknown> {
 /** 获取房间当前成员列表 */
 function getMembers(roomId: string): any[] {
   return getDb().prepare(`
-    SELECT user_id, display_name, avatar, role, status, last_seen_at
+    SELECT user_id, display_name, avatar, role, status, last_seen_at, character_name, character_persona, ready
     FROM online_room_members
     WHERE room_id = ? AND status = 'joined'
     ORDER BY role = 'host' DESC, joined_at ASC
@@ -441,8 +463,12 @@ router.post('/rooms', (req: Request, res: Response) => {
     preset_name,
     required_assets,
     per_player_words,
+    per_player_min_words,
+    per_player_max_words,
     candidate_timeout_seconds,
     erase_on_close,
+    host_character_name,
+    host_character_persona,
   } = req.body || {};
 
   if (!character_card_link || typeof character_card_link !== 'string') {
@@ -464,12 +490,15 @@ router.post('/rooms', (req: Request, res: Response) => {
     : [];
   const hostName = displayName(req.user!);
 
+  const finalMinWords = Math.max(100, Math.min(5000, Number(per_player_min_words) || 700));
+  const finalMaxWords = Math.max(finalMinWords, Math.min(8000, Number(per_player_max_words) || 1000));
+
   getDb().prepare(`
     INSERT INTO online_rooms (
       id, title, visibility, password_hash, password_salt, status, host_user_id, host_name,
       character_name, character_summary, character_opening, custom_opening, character_card_link, preset_name, required_assets,
-      per_player_words, candidate_timeout_seconds, erase_on_close, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      per_player_words, per_player_min_words, per_player_max_words, candidate_timeout_seconds, erase_on_close, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     String(title || '联机房间').slice(0, 80),
@@ -486,6 +515,8 @@ router.post('/rooms', (req: Request, res: Response) => {
     String(preset_name || '').slice(0, 120),
     JSON.stringify(safeAssets),
     Math.max(300, Math.min(1000, Number(per_player_words) || 1000)),
+    finalMinWords,
+    finalMaxWords,
     Math.max(30, Math.min(600, Number(candidate_timeout_seconds) || 120)),
     erase_on_close === false ? 0 : 1,
     now,
@@ -494,9 +525,9 @@ router.post('/rooms', (req: Request, res: Response) => {
 
   getDb().prepare(`
     INSERT INTO online_room_members (
-      room_id, user_id, display_name, avatar, role, status, joined_at, last_seen_at
-    ) VALUES (?, ?, ?, ?, 'host', 'joined', ?, ?)
-  `).run(id, req.user!.id, hostName, req.user!.discord_avatar || '', now, now);
+      room_id, user_id, display_name, avatar, role, status, joined_at, last_seen_at, character_name, character_persona
+    ) VALUES (?, ?, ?, ?, 'host', 'joined', ?, ?, ?, ?)
+  `).run(id, req.user!.id, hostName, req.user!.discord_avatar || '', now, now, String(host_character_name || '').slice(0, 120), String(host_character_persona || '').slice(0, 2000));
 
   recordAuditLog({
     req,
@@ -524,6 +555,14 @@ router.post('/rooms/:roomId/join', (req: Request, res: Response) => {
     res.status(403).json({ error: '房间密码错误' });
     return;
   }
+
+  const characterName = String(req.body?.character_name || '').trim().slice(0, 120);
+  const characterPersona = String(req.body?.character_persona || '').trim().slice(0, 2000);
+  if (!characterName) {
+    res.status(400).json({ error: '请填写你的角色名' });
+    return;
+  }
+
   const existingMember = getMember(room.id, req.user!.id);
   if (!existingMember || existingMember.status !== 'joined') {
     const memberCount = getDb().prepare(`
@@ -537,7 +576,7 @@ router.post('/rooms/:roomId/join', (req: Request, res: Response) => {
     }
   }
 
-  touchMember(room.id, req.user!);
+  touchMember(room.id, req.user!, characterName, characterPersona);
   getDb().prepare('UPDATE online_rooms SET updated_at = ? WHERE id = ?').run(nowIso(), room.id);
 
   recordAuditLog({
@@ -637,6 +676,25 @@ router.post('/rooms/:roomId/chat', (req: Request, res: Response) => {
   res.json({ id: result.lastInsertRowid });
 });
 
+// ─── 切换准备状态 ───
+
+router.post('/rooms/:roomId/ready', (req: Request, res: Response) => {
+  const room = requireRoomMember(req, res);
+  if (!room) return;
+
+  const member = getMember(room.id, req.user!.id);
+  if (!member) return;
+
+  const newReady = member.ready ? 0 : 1;
+  getDb().prepare('UPDATE online_room_members SET ready = ? WHERE room_id = ? AND user_id = ?')
+    .run(newReady, room.id, req.user!.id);
+
+  // SSE 广播成员更新
+  broadcastMemberUpdate(room.id);
+
+  res.json({ ready: !!newReady });
+});
+
 // ─── 开始新一轮 ───
 
 router.post('/rooms/:roomId/rounds', (req: Request, res: Response) => {
@@ -653,6 +711,14 @@ router.post('/rooms/:roomId/rounds', (req: Request, res: Response) => {
     return;
   }
 
+  // 检查所有成员是否已准备
+  const members = getMembers(room.id);
+  const notReady = members.filter(m => !m.ready && m.user_id !== room.host_user_id);
+  if (notReady.length > 0) {
+    res.status(409).json({ error: `还有 ${notReady.length} 位玩家未准备` });
+    return;
+  }
+
   const last = getDb().prepare('SELECT MAX(round_no) as n FROM online_rounds WHERE room_id = ?').get(room.id) as { n: number | null };
   const roundNo = (last.n || 0) + 1;
   const now = nowIso();
@@ -662,11 +728,15 @@ router.post('/rooms/:roomId/rounds', (req: Request, res: Response) => {
     VALUES (?, ?, 'collecting', ?, ?)
   `).run(room.id, roundNo, deadline, now);
 
+  // 重置所有人 ready=0
+  getDb().prepare('UPDATE online_room_members SET ready = 0 WHERE room_id = ?').run(room.id);
+
   getDb().prepare('UPDATE online_rooms SET updated_at = ? WHERE id = ?').run(now, room.id);
 
-  // SSE 广播：新一轮开始
+  // SSE 广播：新一轮开始 + 成员更新（ready 重置）
   const newRound = getDb().prepare('SELECT * FROM online_rounds WHERE id = ?').get(result.lastInsertRowid) as OnlineRoundRow;
   broadcastToRoomAll(room.id, 'round_started', serializeRound(newRound));
+  broadcastMemberUpdate(room.id);
 
   res.json({ round_id: result.lastInsertRowid });
 });
@@ -837,6 +907,39 @@ router.post('/rounds/:roundId/finalize', (req: Request, res: Response) => {
   // SSE 广播：轮次完成
   const finalizedRound = getDb().prepare('SELECT * FROM online_rounds WHERE id = ?').get(round.id) as OnlineRoundRow;
   broadcastToRoomAll(round.room_id, 'round_finalized', serializeRound(finalizedRound));
+
+  // 30 秒后清空正文（节省带宽，历史已同步到各端）
+  setTimeout(() => {
+    try {
+      getDb().prepare("UPDATE online_round_inputs SET candidate_reply = '' WHERE round_id = ?").run(round.id);
+    } catch { /* ignore */ }
+  }, 30_000);
+
+  res.json({ ok: true });
+});
+
+// ─── 重Roll（回退到 integrating） ───
+
+router.post('/rounds/:roundId/reroll', (req: Request, res: Response) => {
+  const round = getDb().prepare('SELECT * FROM online_rounds WHERE id = ?').get(req.params.roundId) as OnlineRoundRow | undefined;
+  if (!round || round.status !== 'finalized') {
+    res.status(404).json({ error: '当前轮次不存在或不在已完成状态' });
+    return;
+  }
+  const room = requireHost(req, res, round.room_id);
+  if (!room) return;
+
+  const now = nowIso();
+  getDb().prepare(`
+    UPDATE online_rounds
+    SET status = 'integrating', finalized_at = ''
+    WHERE id = ?
+  `).run(round.id);
+  getDb().prepare('UPDATE online_rooms SET updated_at = ? WHERE id = ?').run(now, round.room_id);
+
+  // SSE 广播：回合状态更新
+  const updatedRound = getDb().prepare('SELECT * FROM online_rounds WHERE id = ?').get(round.id) as OnlineRoundRow;
+  broadcastRoundUpdate(round.room_id, updatedRound);
 
   res.json({ ok: true });
 });

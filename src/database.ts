@@ -342,6 +342,11 @@ export function initDatabase(): Database.Database {
   migrateColumn('audit_logs', 'action_label', "TEXT DEFAULT ''");
   migrateColumn('online_rooms', 'character_opening', "TEXT DEFAULT ''");
   migrateColumn('online_rooms', 'custom_opening', "TEXT DEFAULT ''");
+  migrateColumn('online_room_members', 'character_name', "TEXT DEFAULT ''");
+  migrateColumn('online_room_members', 'character_persona', "TEXT DEFAULT ''");
+  migrateColumn('online_room_members', 'ready', "INTEGER DEFAULT 0");
+  migrateColumn('online_rooms', 'per_player_min_words', "INTEGER DEFAULT 700");
+  migrateColumn('online_rooms', 'per_player_max_words', "INTEGER DEFAULT 1000");
 
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_works_status ON works(status);
