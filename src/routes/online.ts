@@ -469,7 +469,7 @@ router.post('/rooms', (req: Request, res: Response) => {
       id, title, visibility, password_hash, password_salt, status, host_user_id, host_name,
       character_name, character_summary, character_opening, custom_opening, character_card_link, preset_name, required_assets,
       per_player_words, candidate_timeout_seconds, erase_on_close, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     String(title || '联机房间').slice(0, 80),
